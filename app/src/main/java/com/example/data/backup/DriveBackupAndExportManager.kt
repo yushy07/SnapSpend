@@ -4,7 +4,9 @@ import android.Manifest
 import android.app.Activity
 import android.app.NotificationChannel
 import android.app.NotificationManager
+import android.app.PendingIntent
 import android.content.Context
+import android.content.Intent
 import android.content.IntentSender
 import android.content.pm.PackageManager
 import android.os.Build
@@ -439,7 +441,7 @@ class DriveBackupAndExportManager(private val context: Context) {
             if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
                 val channel = NotificationChannel(
                     BUDGET_CHANNEL_ID,
-                    "Budget Warnings",
+                    "Budget alerts",
                     NotificationManager.IMPORTANCE_DEFAULT
                 ).apply {
                     description = "Alerts when category spending reaches 80% or 100% of your monthly limit"
@@ -460,10 +462,23 @@ class DriveBackupAndExportManager(private val context: Context) {
             }
             val body = "You've spent $spentFormatted out of your $limitFormatted monthly limit."
 
+            val openIntent = Intent(context, com.example.MainActivity::class.java).apply {
+                flags = Intent.FLAG_ACTIVITY_SINGLE_TOP or Intent.FLAG_ACTIVITY_CLEAR_TOP
+                putExtra("TARGET_TAB", "CATEGORIES")
+                putExtra("TARGET_CATEGORY", categoryName)
+            }
+            val pendingIntent = PendingIntent.getActivity(
+                context,
+                categoryName.hashCode(),
+                openIntent,
+                PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
+            )
+
             val notification = NotificationCompat.Builder(context, BUDGET_CHANNEL_ID)
                 .setSmallIcon(R.mipmap.ic_launcher)
                 .setContentTitle(title)
                 .setContentText(body)
+                .setContentIntent(pendingIntent)
                 .setPriority(NotificationCompat.PRIORITY_DEFAULT)
                 .setAutoCancel(true)
                 .build()

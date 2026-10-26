@@ -7,6 +7,7 @@ import android.content.pm.PackageManager
 import android.net.Uri
 import android.os.Build
 import android.os.Bundle
+import androidx.core.app.ActivityCompat
 import androidx.activity.ComponentActivity
 import androidx.activity.SystemBarStyle
 import androidx.activity.compose.BackHandler
@@ -148,6 +149,19 @@ import com.example.ui.theme.TrueBlackBg
 import com.example.ui.theme.dialogScaleFadeEntrance
 import com.example.util.MoneyUtils
 import com.example.util.configureAppCheck
+import android.provider.MediaStore
+import android.provider.Settings
+import androidx.lifecycle.Lifecycle
+import androidx.lifecycle.LifecycleEventObserver
+import androidx.lifecycle.compose.LocalLifecycleOwner
+import androidx.compose.runtime.DisposableEffect
+import androidx.compose.runtime.rememberCoroutineScope
+import kotlinx.coroutines.launch
+import com.example.data.local.SnapSpendPreferences
+import com.example.ui.screens.OnboardingCarouselScreen
+import com.example.ui.components.BeforeFirstScanDisclosureDialog
+import com.example.ui.components.NotificationPermissionRationaleDialog
+import com.example.ui.components.AppSettingsRedirectDialog
 import java.io.File
 import kotlin.math.roundToInt
 import kotlinx.coroutines.delay
@@ -192,12 +206,33 @@ class MainActivity : ComponentActivity() {
 
         setContent {
             val themeMode by viewModel.themeMode.collectAsStateWithLifecycle()
+            val snapSpendPrefs = remember { SnapSpendPreferences(this@MainActivity) }
+            val hasSeenOnboarding by snapSpendPrefs.hasSeenOnboardingFlow.collectAsStateWithLifecycle(initialValue = null)
+            val coroutineScope = rememberCoroutineScope()
+
             SnapSpendTheme(themeMode = themeMode) {
-                SnapSpendRootScreen(
-                    viewModel = viewModel,
-                    themeMode = themeMode,
-                    activity = this
-                )
+                if (hasSeenOnboarding == false) {
+                    OnboardingCarouselScreen(
+                        onFinish = {
+                            coroutineScope.launch {
+                                snapSpendPrefs.setHasSeenOnboarding(true)
+                            }
+                        }
+                    )
+                } else if (hasSeenOnboarding == true) {
+                    SnapSpendRootScreen(
+                        viewModel = viewModel,
+                        themeMode = themeMode,
+                        activity = this@MainActivity,
+                        snapSpendPrefs = snapSpendPrefs
+                    )
+                } else {
+                    Box(
+                        modifier = Modifier
+                            .fillMaxSize()
+                            .background(SnapSpendThemeTokens.colors.appBackground)
+                    )
+                }
             }
         }
     }
@@ -241,10 +276,12 @@ class MainActivity : ComponentActivity() {
 fun SnapSpendRootScreen(
     viewModel: SnapSpendViewModel,
     themeMode: ThemeMode = ThemeMode.SYSTEM,
-    activity: Activity
+    activity: Activity,
+    snapSpendPrefs: SnapSpendPreferences
 ) {
     val tokens = SnapSpendThemeTokens.colors
     val isDark = tokens.isDark
+    val coroutineScope = rememberCoroutineScope()
 
     val uiState by viewModel.uiState.collectAsStateWithLifecycle()
     val scanState by viewModel.scanState.collectAsStateWithLifecycle()
@@ -254,7 +291,72 @@ fun SnapSpendRootScreen(
     val pendingConsentSender by viewModel.pendingConsentIntentSender.collectAsStateWithLifecycle()
     val toastMessage by viewModel.toastMessage.collectAsStateWithLifecycle()
 
-    var currentTab by rememberSaveable { mutableStateOf(SnapSpendTab.HOME) }
+    val hasSeenAiScanNotice by snapSpendPrefs.hasSeenAiScanNoticeFlow.collectAsStateWithLifecycle(initialValue = false)
+    val hasPromptedBudgetNotifications by snapSpendPrefs.hasPromptedBudgetNotificationsFlow.collectAsStateWithLifecycle(initialValue = false)
+
+    var showOnboardingReplay by rememberSaveable { mutableStateOf(false) }
+    var showBeforeFirstScanDialog by rememberSaveable { mutableStateOf(false) }
+    var pendingScanAction by remember { mutableStateOf<(() -> Unit)?>(null) }
+
+    var showBudgetNotificationRationale by rememberSaveable { mutableStateOf(false) }
+    var showBlockedNotificationSettingsDialog by rememberSaveable { mutableStateOf(false) }
+    var notificationPermissionStatus by remember { mutableStateOf("NOT_ASKED") }
+
+    if (showOnboardingReplay) {
+        OnboardingCarouselScreen(
+            onFinish = { showOnboardingReplay = false }
+        )
+        return
+    }
+
+    // Lifecycle observer: refresh notification permission on ON_RESUME
+    val lifecycleOwner = LocalLifecycleOwner.current
+    DisposableEffect(lifecycleOwner) {
+        val observer = LifecycleEventObserver { _, event ->
+            if (event == Lifecycle.Event.ON_RESUME) {
+                notificationPermissionStatus = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+                    when {
+                        ContextCompat.checkSelfPermission(activity, Manifest.permission.POST_NOTIFICATIONS) == PackageManager.PERMISSION_GRANTED -> "ALLOWED"
+                        ActivityCompat.shouldShowRequestPermissionRationale(activity, Manifest.permission.POST_NOTIFICATIONS) -> "NOT_ASKED"
+                        else -> "NOT_ASKED"
+                    }
+                } else {
+                    "ALLOWED"
+                }
+            }
+        }
+        lifecycleOwner.lifecycle.addObserver(observer)
+        onDispose { lifecycleOwner.lifecycle.removeObserver(observer) }
+    }
+
+    fun openAppSystemSettings() {
+        try {
+            val intent = Intent(Settings.ACTION_APPLICATION_DETAILS_SETTINGS).apply {
+                data = Uri.fromParts("package", activity.packageName, null)
+            }
+            activity.startActivity(intent)
+        } catch (_: Exception) {
+            viewModel.showToast("Could not open system settings.")
+        }
+    }
+
+    fun performWithFirstScanNoticeCheck(action: () -> Unit) {
+        if (!hasSeenAiScanNotice) {
+            pendingScanAction = action
+            showBeforeFirstScanDialog = true
+        } else {
+            action()
+        }
+    }
+
+    val initialTab = remember {
+        if (activity.intent?.getStringExtra("TARGET_TAB") == "CATEGORIES") {
+            SnapSpendTab.CATEGORIES
+        } else {
+            SnapSpendTab.HOME
+        }
+    }
+    var currentTab by rememberSaveable { mutableStateOf(initialTab) }
     var showQuickAddSheet by rememberSaveable { mutableStateOf(false) }
     var showAiNoteDialog by rememberSaveable { mutableStateOf(false) }
     var showBudgetSetupDialog by rememberSaveable { mutableStateOf(false) }
@@ -288,67 +390,53 @@ fun SnapSpendRootScreen(
         }
     }
 
-    // Pending URI for full-resolution Camera capture via FileProvider
+    // Pending URI & File for full-resolution Camera capture via FileProvider
+    var pendingCameraPhotoFile by remember { mutableStateOf<File?>(null) }
     var pendingCameraCaptureUri by remember { mutableStateOf<Uri?>(null) }
-
-    // Fallback Thumbnail/Preview Camera Launcher if FileProvider camera intent isn't supported
-    val cameraPreviewLauncher = rememberLauncherForActivityResult(
-        contract = ActivityResultContracts.TakePicturePreview()
-    ) { bitmap ->
-        if (bitmap != null) {
-            viewModel.processCapturedCameraBitmap(bitmap)
-        }
-    }
 
     // Full-resolution Camera Capture Launcher -> sends captured image directly to Gemini
     val cameraTakePictureLauncher = rememberLauncherForActivityResult(
         contract = ActivityResultContracts.TakePicture()
     ) { success ->
         val capturedUri = pendingCameraCaptureUri
+        val capturedFile = pendingCameraPhotoFile
         if (success && capturedUri != null) {
-            viewModel.processSelectedUris(listOf(capturedUri))
+            viewModel.processSelectedUris(listOf(capturedUri)) {
+                // Delete temporary photo file right after scan finishes or fails
+                capturedFile?.delete()
+            }
+        } else {
+            // Cancelled: delete temporary photo file immediately
+            capturedFile?.delete()
         }
+        pendingCameraCaptureUri = null
+        pendingCameraPhotoFile = null
     }
 
     fun launchCameraCaptureNow() {
+        val takePictureIntent = Intent(MediaStore.ACTION_IMAGE_CAPTURE)
+        if (takePictureIntent.resolveActivity(activity.packageManager) == null) {
+            viewModel.showToast("No camera app found on this device — pick a screenshot or PDF instead.")
+            showQuickAddSheet = true
+            return
+        }
         try {
             val captureDir = File(activity.cacheDir, "camera_captures").apply { mkdirs() }
             val photoFile = File(captureDir, "snapspend_scan_${System.currentTimeMillis()}.jpg")
             val authority = "${activity.packageName}.fileprovider"
             val contentUri = FileProvider.getUriForFile(activity, authority, photoFile)
+            pendingCameraPhotoFile = photoFile
             pendingCameraCaptureUri = contentUri
             cameraTakePictureLauncher.launch(contentUri)
         } catch (_: Exception) {
-            try {
-                cameraPreviewLauncher.launch(null)
-            } catch (_: Exception) {
-                viewModel.showToast("Camera unavailable on this device — pick a screenshot or PDF instead.")
-                showQuickAddSheet = true
-            }
-        }
-    }
-
-    // Runtime CAMERA permission launcher for Quick Scan
-    val cameraPermissionLauncher = rememberLauncherForActivityResult(
-        contract = ActivityResultContracts.RequestPermission()
-    ) { isGranted ->
-        if (isGranted) {
-            launchCameraCaptureNow()
-        } else {
-            viewModel.showToast("Camera permission denied — choose a screenshot or PDF to scan.")
+            viewModel.showToast("Camera unavailable on this device — pick a screenshot or PDF instead.")
             showQuickAddSheet = true
         }
     }
 
     fun triggerQuickCameraScan() {
-        val hasCameraPermission = ContextCompat.checkSelfPermission(
-            activity,
-            Manifest.permission.CAMERA
-        ) == PackageManager.PERMISSION_GRANTED
-        if (hasCameraPermission) {
+        performWithFirstScanNoticeCheck {
             launchCameraCaptureNow()
-        } else {
-            cameraPermissionLauncher.launch(Manifest.permission.CAMERA)
         }
     }
 
@@ -389,7 +477,9 @@ fun SnapSpendRootScreen(
     // Optional Android 13+ notification permission launcher for budget warnings
     val notificationPermissionLauncher = rememberLauncherForActivityResult(
         contract = ActivityResultContracts.RequestPermission()
-    ) { /* handled gracefully */ }
+    ) { isGranted ->
+        notificationPermissionStatus = if (isGranted) "ALLOWED" else "BLOCKED"
+    }
 
     LaunchedEffect(pendingConsentSender) {
         val sender = pendingConsentSender
@@ -531,18 +621,26 @@ fun SnapSpendRootScreen(
                                     HomeScreen(
                                         uiState = uiState,
                                         onPickImagesClick = {
-                                            photoPickerLauncher.launch(
-                                                PickVisualMediaRequest(ActivityResultContracts.PickVisualMedia.ImageOnly)
-                                            )
+                                            performWithFirstScanNoticeCheck {
+                                                photoPickerLauncher.launch(
+                                                    PickVisualMediaRequest(ActivityResultContracts.PickVisualMedia.ImageOnly)
+                                                )
+                                            }
                                         },
                                         onPickPdfClick = {
-                                            pdfPickerLauncher.launch(arrayOf("application/pdf"))
+                                            performWithFirstScanNoticeCheck {
+                                                pdfPickerLauncher.launch(arrayOf("application/pdf"))
+                                            }
                                         },
                                         onAiQuickNoteClick = {
-                                            showAiNoteDialog = true
+                                            performWithFirstScanNoticeCheck {
+                                                showAiNoteDialog = true
+                                            }
                                         },
                                         onTrySampleScanClick = {
-                                            viewModel.scanSampleUpiScreenshotWithGemini(samplePresetCounter++)
+                                            performWithFirstScanNoticeCheck {
+                                                viewModel.scanSampleUpiScreenshotWithGemini(samplePresetCounter++)
+                                            }
                                         },
                                         onManualAddClick = {
                                             editingTransaction = null
@@ -589,8 +687,11 @@ fun SnapSpendRootScreen(
                                     CategoriesFolderScreen(
                                         uiState = uiState,
                                         onSaveBudget = { category, limitPaise ->
-                                            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
-                                                notificationPermissionLauncher.launch(Manifest.permission.POST_NOTIFICATIONS)
+                                            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU &&
+                                                notificationPermissionStatus != "ALLOWED" &&
+                                                !hasPromptedBudgetNotifications
+                                            ) {
+                                                showBudgetNotificationRationale = true
                                             }
                                             viewModel.saveBudget(category, limitPaise)
                                         },
@@ -609,8 +710,11 @@ fun SnapSpendRootScreen(
                                         onChartDateRangeChange = viewModel::updateChartDateRange,
                                         onLineGranularityChange = viewModel::updateLineGranularity,
                                         onSaveBudget = { category, limitPaise ->
-                                            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
-                                                notificationPermissionLauncher.launch(Manifest.permission.POST_NOTIFICATIONS)
+                                            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU &&
+                                                notificationPermissionStatus != "ALLOWED" &&
+                                                !hasPromptedBudgetNotifications
+                                            ) {
+                                                showBudgetNotificationRationale = true
                                             }
                                             viewModel.saveBudget(category, limitPaise)
                                         },
@@ -660,6 +764,22 @@ fun SnapSpendRootScreen(
                                         onDeleteCategory = viewModel::deleteCustomCategory,
                                         onDeleteMerchantMemory = { normMerchant ->
                                             viewModel.showToast("Removed learned rule for $normMerchant")
+                                        },
+                                        onOpenOnboardingClick = {
+                                            showOnboardingReplay = true
+                                        },
+                                        notificationPermissionStatus = notificationPermissionStatus,
+                                        onRequestNotificationPermission = {
+                                            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+                                                if (notificationPermissionStatus == "BLOCKED") {
+                                                    showBlockedNotificationSettingsDialog = true
+                                                } else {
+                                                    showBudgetNotificationRationale = true
+                                                }
+                                            }
+                                        },
+                                        onOpenAppSettings = {
+                                            openAppSystemSettings()
                                         },
                                         topContentPadding = topContentPadding,
                                         bottomContentPadding = bottomContentPadding
@@ -748,18 +868,26 @@ fun SnapSpendRootScreen(
                 triggerQuickCameraScan()
             },
             onPickScreenshots = {
-                photoPickerLauncher.launch(
-                    PickVisualMediaRequest(ActivityResultContracts.PickVisualMedia.ImageOnly)
-                )
+                performWithFirstScanNoticeCheck {
+                    photoPickerLauncher.launch(
+                        PickVisualMediaRequest(ActivityResultContracts.PickVisualMedia.ImageOnly)
+                    )
+                }
             },
             onPickPdf = {
-                pdfPickerLauncher.launch(arrayOf("application/pdf"))
+                performWithFirstScanNoticeCheck {
+                    pdfPickerLauncher.launch(arrayOf("application/pdf"))
+                }
             },
             onAiQuickNote = {
-                showAiNoteDialog = true
+                performWithFirstScanNoticeCheck {
+                    showAiNoteDialog = true
+                }
             },
             onTrySampleAiReceipt = {
-                viewModel.scanSampleUpiScreenshotWithGemini(samplePresetCounter++)
+                performWithFirstScanNoticeCheck {
+                    viewModel.scanSampleUpiScreenshotWithGemini(samplePresetCounter++)
+                }
             },
             onManualAdd = {
                 editingTransaction = null
@@ -874,8 +1002,10 @@ fun SnapSpendRootScreen(
                     onClick = {
                         val paise = MoneyUtils.parseRupeesToPaise(limitInputText)
                         if (paise != null && paise > 0L) {
-                            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
-                                notificationPermissionLauncher.launch(Manifest.permission.POST_NOTIFICATIONS)
+                            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU && !hasPromptedBudgetNotifications) {
+                                if (ContextCompat.checkSelfPermission(activity, Manifest.permission.POST_NOTIFICATIONS) != PackageManager.PERMISSION_GRANTED) {
+                                    showBudgetNotificationRationale = true
+                                }
                             }
                             viewModel.saveBudget(selectedBudgetCategory, paise)
                             showBudgetSetupDialog = false
@@ -939,6 +1069,57 @@ fun SnapSpendRootScreen(
                 TextButton(onClick = viewModel::dismissRestoreOffer) {
                     Text("Not now", color = tokens.primaryText, fontWeight = FontWeight.Bold)
                 }
+            }
+        )
+    }
+
+    // One-time Before First Scan AI Notice Dialog
+    if (showBeforeFirstScanDialog) {
+        BeforeFirstScanDisclosureDialog(
+            onDismiss = {
+                showBeforeFirstScanDialog = false
+                pendingScanAction = null
+            },
+            onConfirm = {
+                showBeforeFirstScanDialog = false
+                coroutineScope.launch {
+                    snapSpendPrefs.setHasSeenAiScanNotice(true)
+                }
+                val action = pendingScanAction
+                pendingScanAction = null
+                action?.invoke()
+            }
+        )
+    }
+
+    // Just-in-time Budget Alerts Notification Permission Rationale Dialog
+    if (showBudgetNotificationRationale) {
+        NotificationPermissionRationaleDialog(
+            onDismiss = {
+                showBudgetNotificationRationale = false
+                coroutineScope.launch {
+                    snapSpendPrefs.setHasPromptedBudgetNotifications(true)
+                }
+            },
+            onContinue = {
+                showBudgetNotificationRationale = false
+                coroutineScope.launch {
+                    snapSpendPrefs.setHasPromptedBudgetNotifications(true)
+                }
+                if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+                    notificationPermissionLauncher.launch(Manifest.permission.POST_NOTIFICATIONS)
+                }
+            }
+        )
+    }
+
+    // Redirect to System Settings when notifications are blocked
+    if (showBlockedNotificationSettingsDialog) {
+        AppSettingsRedirectDialog(
+            onDismiss = { showBlockedNotificationSettingsDialog = false },
+            onOpenSettings = {
+                showBlockedNotificationSettingsDialog = false
+                openAppSystemSettings()
             }
         )
     }

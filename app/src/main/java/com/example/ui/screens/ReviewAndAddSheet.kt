@@ -93,6 +93,7 @@ import androidx.compose.ui.geometry.Size
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.graphicsLayer
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalView
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.text.font.FontWeight
@@ -496,6 +497,7 @@ fun AiNaturalLanguageNoteDialog(
     val isDark = tokens.isDark
     val palette = if (isDark) DarkCandyCardPalette else EditorialCardPalette
 
+    val context = LocalContext.current
     var noteText by remember { mutableStateOf("") }
     var voiceStatusHint by remember { mutableStateOf<String?>(null) }
 
@@ -553,7 +555,11 @@ fun AiNaturalLanguageNoteDialog(
                                     "Say your payment details"
                                 )
                             }
-                            speechLauncher.launch(intent)
+                            if (intent.resolveActivity(context.packageManager) != null) {
+                                speechLauncher.launch(intent)
+                            } else {
+                                voiceStatusHint = "Speech recognition isn't available on this device — type your note below."
+                            }
                         } catch (_: Exception) {
                             voiceStatusHint = "Speech recognition isn't available on this device — type your note below."
                         }

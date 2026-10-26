@@ -63,6 +63,7 @@ import com.example.data.local.CategoryType
 import com.example.ui.SnapSpendUiState
 import com.example.ui.components.BrightCardCornerIconButton
 import com.example.ui.components.Editorial3DLayerBox
+import com.example.ui.components.RoundArrowButton
 import com.example.ui.components.SegmentedPillToggle
 import com.example.ui.components.StatusDotPill
 import com.example.ui.components.StatusPillBadge
@@ -79,9 +80,13 @@ import com.example.ui.theme.EditorialMint
 import com.example.ui.theme.InkBlack
 import com.example.ui.theme.MarkScreenEntrancePlayedEffect
 import com.example.ui.theme.Motion
+import com.example.ui.theme.PaleAquaTint
 import com.example.ui.theme.PaleLavenderTint
 import com.example.ui.theme.PaleMintHero
+import com.example.ui.theme.PaleMintTint
+import com.example.ui.theme.PalePinkTint
 import com.example.ui.theme.PeriwinkleIndigo
+import androidx.compose.ui.graphics.Color
 import com.example.ui.theme.PureWhite
 import com.example.ui.theme.SnapSpendThemeTokens
 import com.example.ui.theme.SunnyYellow
@@ -110,6 +115,10 @@ fun SettingsAndBackupScreen(
     onSaveCategory: (id: Long, oldName: String?, newName: String, type: CategoryType, colorHex: String, isDefault: Boolean) -> Unit,
     onDeleteCategory: (CategoryEntity) -> Unit,
     onDeleteMerchantMemory: (normalizedMerchant: String) -> Unit,
+    onOpenOnboardingClick: () -> Unit = {},
+    notificationPermissionStatus: String = "ALLOWED",
+    onRequestNotificationPermission: () -> Unit = {},
+    onOpenAppSettings: () -> Unit = {},
     topContentPadding: Dp = 8.dp,
     bottomContentPadding: Dp = 120.dp,
     modifier: Modifier = Modifier
@@ -202,6 +211,177 @@ fun SettingsAndBackupScreen(
                             labelProvider = { it.label },
                             onOptionSelected = onThemeModeChange,
                             optionTestTagProvider = { "theme_option_${it.name.lowercase()}" }
+                        )
+                    }
+                }
+            }
+        }
+
+        // 2b. How to Use SnapSpend Carousel Replay Card
+        item(key = "settings_how_to_use_card") {
+            Editorial3DLayerBox(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .staggeredScreenEntrance(screenKey = "settings", index = 2)
+                    .testTag("how_to_use_card"),
+                shape = RoundedCornerShape(22.dp),
+                extrusionColor = InkBlack,
+                extrusionBorderColor = InkBlack,
+                depthX = 4.dp,
+                depthY = 5.dp
+            ) {
+                Surface(
+                    onClick = onOpenOnboardingClick,
+                    modifier = Modifier.fillMaxWidth(),
+                    shape = RoundedCornerShape(22.dp),
+                    color = SunnyYellow,
+                    contentColor = InkBlack,
+                    border = BorderStroke(1.8.dp, InkBlack)
+                ) {
+                    Row(
+                        modifier = Modifier.padding(20.dp),
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.SpaceBetween
+                    ) {
+                        Column(modifier = Modifier.weight(1f)) {
+                            Text(
+                                text = "HOW TO USE SNAPSPEND",
+                                style = CondensedCardTitleStyle.copy(fontSize = 20.sp),
+                                color = InkBlack
+                            )
+                            Text(
+                                text = "Watch the quick 5-slide visual guide again",
+                                style = MaterialTheme.typography.bodySmall.copy(fontWeight = FontWeight.SemiBold),
+                                color = InkBlack.copy(alpha = 0.85f)
+                            )
+                        }
+                        RoundArrowButton(
+                            onClick = onOpenOnboardingClick,
+                            onColoredCard = true,
+                            contentDescription = "Open guide",
+                            size = 40.dp
+                        )
+                    }
+                }
+            }
+        }
+
+        // 2c. System Permissions Status Card (Pale Aqua #CDF3F8 with Black Text & Outline)
+        item(key = "settings_permissions_card") {
+            Editorial3DLayerBox(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .staggeredScreenEntrance(screenKey = "settings", index = 3)
+                    .testTag("permissions_card"),
+                shape = RoundedCornerShape(28.dp),
+                extrusionColor = InkBlack,
+                extrusionBorderColor = InkBlack,
+                depthX = 4.dp,
+                depthY = 6.dp
+            ) {
+                Surface(
+                    modifier = Modifier.fillMaxWidth(),
+                    shape = RoundedCornerShape(28.dp),
+                    color = PaleAquaTint,
+                    contentColor = InkBlack,
+                    border = BorderStroke(1.8.dp, InkBlack)
+                ) {
+                    Column(modifier = Modifier.padding(22.dp)) {
+                        TinySectionLabel(
+                            text = "DEVICE PERMISSIONS",
+                            color = InkBlack.copy(alpha = 0.72f)
+                        )
+                        Spacer(modifier = Modifier.height(4.dp))
+                        Text(
+                            text = "PERMISSIONS",
+                            style = CondensedCardTitleStyle.copy(fontSize = 26.sp),
+                            color = InkBlack
+                        )
+                        Text(
+                            text = "Used exclusively for local budget warnings",
+                            style = MaterialTheme.typography.bodySmall.copy(fontWeight = FontWeight.SemiBold),
+                            color = InkBlack.copy(alpha = 0.80f)
+                        )
+                        Spacer(modifier = Modifier.height(16.dp))
+
+                        // Notification Permission Row
+                        Surface(
+                            modifier = Modifier.fillMaxWidth(),
+                            shape = RoundedCornerShape(16.dp),
+                            color = PureWhite,
+                            border = BorderStroke(1.4.dp, InkBlack)
+                        ) {
+                            Row(
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .padding(horizontal = 16.dp, vertical = 12.dp),
+                                horizontalArrangement = Arrangement.SpaceBetween,
+                                verticalAlignment = Alignment.CenterVertically
+                            ) {
+                                Column(modifier = Modifier.weight(1f)) {
+                                    Text(
+                                        text = "Notifications",
+                                        style = CondensedCardTitleStyle.copy(fontSize = 17.sp),
+                                        color = InkBlack
+                                    )
+                                    Text(
+                                        text = "Alerts at 80% & 100% of budget",
+                                        style = MaterialTheme.typography.labelSmall,
+                                        color = InkBlack.copy(alpha = 0.70f)
+                                    )
+                                }
+
+                                Row(
+                                    verticalAlignment = Alignment.CenterVertically,
+                                    horizontalArrangement = Arrangement.spacedBy(8.dp)
+                                ) {
+                                    when (notificationPermissionStatus) {
+                                        "ALLOWED" -> {
+                                            StatusDotPill(
+                                                text = "Allowed",
+                                                dotColor = EditorialMint,
+                                                backgroundColor = PaleMintTint,
+                                                textColor = InkBlack
+                                            )
+                                        }
+                                        "NOT_ASKED" -> {
+                                            StatusDotPill(
+                                                text = "Not asked",
+                                                dotColor = Color.Gray,
+                                                backgroundColor = Color(0xFFEEEEEE),
+                                                textColor = InkBlack
+                                            )
+                                            WhitePillChip(
+                                                label = "Enable",
+                                                selected = false,
+                                                onClick = onRequestNotificationPermission,
+                                                testTag = "enable_notifications_button"
+                                            )
+                                        }
+                                        else -> {
+                                            StatusDotPill(
+                                                text = "Blocked",
+                                                dotColor = EditorialCoral,
+                                                backgroundColor = PalePinkTint,
+                                                textColor = InkBlack
+                                            )
+                                            WhitePillChip(
+                                                label = "Settings",
+                                                selected = false,
+                                                onClick = onOpenAppSettings,
+                                                testTag = "open_settings_permissions_button"
+                                            )
+                                        }
+                                    }
+                                }
+                            }
+                        }
+
+                        Spacer(modifier = Modifier.height(12.dp))
+                        Text(
+                            text = "Photos and files: no permission needed. You choose each file yourself.",
+                            style = MaterialTheme.typography.labelSmall.copy(fontWeight = FontWeight.Medium),
+                            color = InkBlack.copy(alpha = 0.75f)
                         )
                     }
                 }

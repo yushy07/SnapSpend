@@ -442,23 +442,30 @@ class SnapSpendViewModel(application: Application) : AndroidViewModel(applicatio
     }
 
     // --- AI Camera, Screenshot & PDF Extraction Flow ---
-    fun processSelectedUris(uris: List<Uri>) {
-        if (uris.isEmpty()) return
+    fun processSelectedUris(uris: List<Uri>, onFinished: () -> Unit = {}) {
+        if (uris.isEmpty()) {
+            onFinished()
+            return
+        }
         viewModelScope.launch {
-            _scanState.value = ScanUiState.Reading(
-                1,
-                uris.size,
-                "Gemini is parsing amount, date & category..."
-            )
-            val categories = repository.getAllCategoriesOnce()
-            val result = aiExtractor.extractFromUris(
-                uris = uris,
-                categories = categories,
-                onProgress = { step, total, label ->
-                    _scanState.value = ScanUiState.Reading(step, total, label)
-                }
-            )
-            handleExtractionResult(result, lastUris = uris, lastSamplePreset = null)
+            try {
+                _scanState.value = ScanUiState.Reading(
+                    1,
+                    uris.size,
+                    "Gemini is parsing amount, date & category..."
+                )
+                val categories = repository.getAllCategoriesOnce()
+                val result = aiExtractor.extractFromUris(
+                    uris = uris,
+                    categories = categories,
+                    onProgress = { step, total, label ->
+                        _scanState.value = ScanUiState.Reading(step, total, label)
+                    }
+                )
+                handleExtractionResult(result, lastUris = uris, lastSamplePreset = null)
+            } finally {
+                onFinished()
+            }
         }
     }
 
