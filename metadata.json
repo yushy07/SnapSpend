@@ -1,0 +1,6 @@
+{
+  "name": "SnapSpend",
+  "description": "Personal AI expense tracker that reads payment screenshots and PDFs with Gemini, organizes expenses in exact paise, shows editorial charts, and backs up weekly to Google Drive.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
