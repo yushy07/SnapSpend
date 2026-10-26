@@ -1,6 +1,6 @@
 {
-  "summary":  "Comprehensive implementation plan to elevate the 5-slide Onboarding Carousel with interactive 3D elements, floating bills, coins, sparkles/particles, and popular UPI app badges (Google Pay, PhonePe, Paytm, CRED) matching the chunky tactile editorial design system.",
-  "updatedAt":  "2026-10-26T18:58:17.994378736Z",
+  "summary":  "Implementation plan to clean up dead code across the project, including unused imports, orphaned legacy camera thumbnail functions, legacy chart wrappers, and unreferenced layout/color helpers, with strict guarantees of zero behavior, look, or data changes verified by compilation and Robolectric unit tests.",
+  "updatedAt":  "2026-10-26T19:19:30.090863830Z",
   "requestFeedback":  true,
   "userFacing":  true
 }
