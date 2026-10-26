@@ -117,7 +117,6 @@ import com.example.ui.components.EditorialSquiggleBackground
 import com.example.ui.components.StatusPillBadge
 import com.example.ui.components.WhitePillChip
 import com.example.ui.theme.BrightCardBlack
-import com.example.ui.theme.CandyLavenderPurple
 import com.example.ui.theme.CandyLimeGreen
 import com.example.ui.theme.CandyOrange
 import com.example.ui.theme.CandySkyBlue
@@ -135,7 +134,6 @@ import com.example.ui.theme.LimeAccent
 import com.example.ui.theme.LocalReducedMotion
 import com.example.ui.theme.Motion
 import com.example.ui.theme.PastelBeige
-import com.example.ui.theme.PastelCyan
 import com.example.ui.theme.PastelPink
 import com.example.ui.theme.PureWhite
 import com.example.ui.theme.SnapSpendThemeTokens

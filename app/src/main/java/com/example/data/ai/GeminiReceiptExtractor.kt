@@ -25,7 +25,6 @@ import com.google.firebase.ai.type.Schema
 import com.google.firebase.ai.type.ThinkingLevel
 import com.google.firebase.ai.type.content
 import com.google.firebase.ai.type.generationConfig
-import com.google.firebase.ai.type.thinkingConfig
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.TimeoutCancellationException
@@ -440,23 +439,6 @@ class GeminiReceiptExtractor(private val context: Context) {
         return ExtractionResult.Success(listOf(finalDraft))
     }
 
-    /**
-     * Direct Camera capture bitmap extraction using Gemini (`gemini-3.8-flash`) with structured JSON schema.
-     * Automatically parses payment amount, date, category, merchant, payment app, and itemized lines.
-     */
-    suspend fun extractFromCameraBitmap(
-        bitmap: Bitmap,
-        categories: List<CategoryEntity>
-    ): ExtractionResult = withContext(Dispatchers.IO) {
-        val allowedCategories = categories.map { it.name }.ifEmpty {
-            DefaultCategories.ALL_DEFAULTS.map { it.name }
-        }
-        analyzeBitmapWithGemini(
-            bitmap = bitmap,
-            allowedCategories = allowedCategories,
-            source = TransactionSource.SCREENSHOT
-        )
-    }
 
     suspend fun analyzeBitmapWithGemini(
         bitmap: Bitmap,

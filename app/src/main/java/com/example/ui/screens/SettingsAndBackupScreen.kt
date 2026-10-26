@@ -72,8 +72,6 @@ import com.example.ui.components.UppercaseScreenHeader
 import com.example.ui.components.WhitePillChip
 import com.example.ui.theme.BrightCardBlack
 import com.example.ui.theme.CondensedCardTitleStyle
-import com.example.ui.theme.DarkCardSurface
-import com.example.ui.theme.DarkSubtleBorder
 import com.example.ui.theme.EditorialAqua
 import com.example.ui.theme.EditorialCoral
 import com.example.ui.theme.EditorialMint
@@ -85,7 +83,6 @@ import com.example.ui.theme.PaleLavenderTint
 import com.example.ui.theme.PaleMintHero
 import com.example.ui.theme.PaleMintTint
 import com.example.ui.theme.PalePinkTint
-import com.example.ui.theme.PeriwinkleIndigo
 import androidx.compose.ui.graphics.Color
 import com.example.ui.theme.PureWhite
 import com.example.ui.theme.SnapSpendThemeTokens

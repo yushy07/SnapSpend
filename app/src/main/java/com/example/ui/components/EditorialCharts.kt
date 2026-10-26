@@ -1,16 +1,8 @@
 package com.example.ui.components
 
-import androidx.compose.animation.AnimatedContent
 import androidx.compose.animation.core.Animatable
-import androidx.compose.animation.core.Spring
-import androidx.compose.animation.core.animateDpAsState
 import androidx.compose.animation.core.animateFloatAsState
 import androidx.compose.animation.core.spring
-import androidx.compose.animation.fadeIn
-import androidx.compose.animation.fadeOut
-import androidx.compose.animation.scaleIn
-import androidx.compose.animation.scaleOut
-import androidx.compose.animation.togetherWith
 import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.background
@@ -50,7 +42,6 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
-import androidx.compose.ui.geometry.CornerRadius
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.geometry.Size
 import androidx.compose.ui.graphics.Brush
@@ -63,7 +54,6 @@ import androidx.compose.ui.graphics.TransformOrigin
 import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.graphics.drawscope.clipRect
 import androidx.compose.ui.graphics.graphicsLayer
-import androidx.compose.ui.layout.layout
 import androidx.compose.ui.platform.LocalView
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.text.font.FontWeight
@@ -79,10 +69,7 @@ import com.example.data.rules.CategorySlice
 import com.example.data.rules.LineChartPoint
 import com.example.data.rules.MonthlyIncomeExpenseBar
 import com.example.data.rules.PillBarEntry
-import com.example.ui.theme.CandyCardPalette
 import com.example.ui.theme.CondensedCardTitleStyle
-import com.example.ui.theme.DarkCardSurface
-import com.example.ui.theme.DarkSubtleBorder
 import com.example.ui.theme.EditorialAqua
 import com.example.ui.theme.EditorialCoral
 import com.example.ui.theme.EditorialMint
@@ -100,7 +87,6 @@ import com.example.ui.theme.PureWhite
 import com.example.ui.theme.SecondaryGreyText
 import com.example.ui.theme.SnapSpendThemeTokens
 import com.example.ui.theme.SunnyYellow
-import com.example.ui.theme.TrueBlackBg
 import com.example.ui.theme.parseEditorialColor
 import com.example.ui.theme.rememberAnimatedPaise
 import com.example.util.MoneyUtils
@@ -109,30 +95,6 @@ import java.util.Date
 import java.util.Locale
 import kotlinx.coroutines.delay
 
-/**
- * Custom layout modifier that rotates a label -90 degrees AND swaps its measured width & height
- * so rotated labels never clip or crush adjacent chart bars.
- */
-fun Modifier.verticalRotatedLabel(): Modifier = this
-    .graphicsLayer {
-        rotationZ = -90f
-    }
-    .layout { measurable, constraints ->
-        val placeable = measurable.measure(
-            constraints.copy(
-                minWidth = 0,
-                maxWidth = constraints.maxHeight.coerceAtLeast(constraints.maxWidth),
-                minHeight = 0,
-                maxHeight = constraints.maxWidth.coerceAtLeast(constraints.maxHeight)
-            )
-        )
-        layout(placeable.height, placeable.width) {
-            placeable.place(
-                x = -(placeable.width - placeable.height) / 2,
-                y = (placeable.width - placeable.height) / 2
-            )
-        }
-    }
 
 data class DaySpendChipData(
     val dayShort: String,
@@ -1134,26 +1096,6 @@ fun TiltedRepeatingPaymentCard(
     }
 }
 
-/**
- * Legacy compatibility wrapper delegating to CoralComparisonBarChartCard.
- */
-@Composable
-fun EditorialLimePillBarChartCard(
-    title: String,
-    subtitle: String,
-    bars: List<PillBarEntry>,
-    modifier: Modifier = Modifier
-) {
-    val totalSpent = bars.sumOf { it.amountPaise }
-    val avgPerDay = if (bars.isNotEmpty()) totalSpent / bars.size.coerceAtLeast(1) else 0L
-    CoralComparisonBarChartCard(
-        totalSpentPaise = totalSpent,
-        avgPerDayPaise = avgPerDay,
-        comparisonSubtitle = subtitle,
-        bars = bars,
-        modifier = modifier
-    )
-}
 
 /**
  * 3D Extruded Donut / Pie Chart using the editorial palette (Sunny Yellow, Coral, Aqua, Mint, Periwinkle Indigo)

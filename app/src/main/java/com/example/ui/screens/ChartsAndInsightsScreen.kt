@@ -59,8 +59,6 @@ import com.example.ui.components.UppercaseScreenHeader
 import com.example.ui.components.WhitePillDropdown
 import com.example.ui.theme.CandyCardPalette
 import com.example.ui.theme.CondensedCardTitleStyle
-import com.example.ui.theme.DarkCardSurface
-import com.example.ui.theme.DarkSubtleBorder
 import com.example.ui.theme.EditorialAqua
 import com.example.ui.theme.EditorialCoral
 import com.example.ui.theme.EditorialLavender
@@ -72,7 +70,6 @@ import com.example.ui.theme.PalePinkTint
 import com.example.ui.theme.PeriwinkleIndigo
 import com.example.ui.theme.PureWhite
 import com.example.ui.theme.MarkScreenEntrancePlayedEffect
-import com.example.ui.theme.SecondaryGreyText
 import com.example.ui.theme.SnapSpendThemeTokens
 import com.example.ui.theme.SunnyYellow
 import com.example.ui.theme.rememberAnimatedPaise

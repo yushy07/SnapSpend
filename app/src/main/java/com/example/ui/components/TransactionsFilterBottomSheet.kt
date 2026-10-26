@@ -41,7 +41,6 @@ import com.example.ui.theme.CandyLavenderPurple
 import com.example.ui.theme.CandyLimeGreen
 import com.example.ui.theme.CandySkyBlue
 import com.example.ui.theme.CandySunshineYellow
-import com.example.ui.theme.InkBlack
 import com.example.ui.theme.LimeAccent
 import com.example.ui.theme.PastelBeige
 import com.example.ui.theme.PastelCyan

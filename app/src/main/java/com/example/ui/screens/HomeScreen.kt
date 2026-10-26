@@ -1,8 +1,6 @@
 package com.example.ui.screens
 
-import androidx.compose.animation.core.Spring
 import androidx.compose.animation.core.animateFloatAsState
-import androidx.compose.animation.core.spring
 import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
@@ -85,8 +83,6 @@ import com.example.ui.components.WhitePillChip
 import com.example.ui.components.WideSecondaryPillButton
 import com.example.ui.theme.BrightCardBlack
 import com.example.ui.theme.CondensedCardTitleStyle
-import com.example.ui.theme.DarkCardSurface
-import com.example.ui.theme.DarkSubtleBorder
 import com.example.ui.theme.EditorialAqua
 import com.example.ui.theme.EditorialCoral
 import com.example.ui.theme.EditorialLavender
@@ -97,7 +93,6 @@ import com.example.ui.theme.LocalReducedMotion
 import com.example.ui.theme.MarkScreenEntrancePlayedEffect
 import com.example.ui.theme.Motion
 import com.example.ui.theme.PureWhite
-import com.example.ui.theme.SecondaryGreyText
 import com.example.ui.theme.SnapSpendThemeTokens
 import com.example.ui.theme.SunnyYellow
 import com.example.ui.theme.rememberAnimatedPaise

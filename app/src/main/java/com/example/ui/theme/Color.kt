@@ -109,16 +109,6 @@ val PaleTintCardPalette = listOf(
     PaleLavenderTint
 )
 
-/**
- * Returns a slightly lighter tint of a bright card color for corner icon buttons or inner boxes.
- */
-fun lighterCardTint(cardColor: Color): Color {
-    return if (cardColor == EditorialCoral) {
-        LighterCoral
-    } else {
-        lerp(cardColor, PureWhite, 0.28f)
-    }
-}
 
 fun parseEditorialColor(hex: String): Color {
     return try {

@@ -22,7 +22,6 @@ import com.example.data.local.RepeatingState
 import com.example.data.local.SnapSpendDatabase
 import com.example.data.local.TransactionEntity
 import com.example.data.local.TransactionSource
-import com.example.data.local.TransactionStatus
 import com.example.data.local.TransactionType
 import com.example.data.repository.SnapSpendRepository
 import com.example.data.rules.BudgetStatusItem
@@ -469,24 +468,6 @@ class SnapSpendViewModel(application: Application) : AndroidViewModel(applicatio
         }
     }
 
-    /**
-     * Processes a direct camera capture Bitmap with Gemini AI to automatically parse amount, date, and category.
-     */
-    fun processCapturedCameraBitmap(bitmap: android.graphics.Bitmap) {
-        viewModelScope.launch {
-            _scanState.value = ScanUiState.Reading(
-                1,
-                1,
-                "Gemini is parsing camera photo (amount, date & category)..."
-            )
-            val categories = repository.getAllCategoriesOnce()
-            val result = aiExtractor.extractFromCameraBitmap(
-                bitmap = bitmap,
-                categories = categories
-            )
-            handleExtractionResult(result, lastUris = emptyList(), lastSamplePreset = null)
-        }
-    }
 
     /**
      * Generates a realistic sample UPI & itemized receipt screenshot bitmap on-device and sends it

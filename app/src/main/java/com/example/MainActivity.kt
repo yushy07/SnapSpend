@@ -21,7 +21,6 @@ import androidx.activity.viewModels
 import androidx.compose.animation.AnimatedContent
 import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.animation.animateColorAsState
-import androidx.compose.animation.animateContentSize
 import androidx.compose.animation.core.animateDpAsState
 import androidx.compose.animation.core.animateFloatAsState
 import androidx.compose.animation.expandHorizontally
@@ -131,7 +130,6 @@ import com.example.ui.theme.DarkCardSurface
 import com.example.ui.theme.DarkSubtleBorder
 import com.example.ui.theme.EditorialAqua
 import com.example.ui.theme.EditorialBg
-import com.example.ui.theme.EditorialCoral
 import com.example.ui.theme.InkBlack
 import androidx.compose.ui.layout.onGloballyPositioned
 import androidx.compose.ui.layout.positionInParent
@@ -140,7 +138,6 @@ import com.example.ui.theme.Motion
 import com.example.ui.theme.NewTransactionHighlightTracker
 import com.example.ui.theme.PeriwinkleIndigo
 import com.example.ui.theme.PureWhite
-import com.example.ui.theme.SecondaryGreyText
 import com.example.ui.theme.SnapSpendTheme
 import com.example.ui.theme.SnapSpendThemeTokens
 import com.example.ui.theme.SunnyYellow
