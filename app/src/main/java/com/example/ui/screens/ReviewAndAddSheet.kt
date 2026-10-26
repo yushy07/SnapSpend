@@ -6,8 +6,25 @@ import android.speech.RecognizerIntent
 import androidx.activity.compose.BackHandler
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
+import androidx.compose.animation.AnimatedContent
+import androidx.compose.animation.core.Animatable
+import androidx.compose.animation.core.FastOutSlowInEasing
+import androidx.compose.animation.core.LinearEasing
+import androidx.compose.animation.core.RepeatMode
+import androidx.compose.animation.core.animateFloat
+import androidx.compose.animation.core.infiniteRepeatable
+import androidx.compose.animation.core.keyframes
+import androidx.compose.animation.core.rememberInfiniteTransition
+import androidx.compose.animation.core.tween
+import androidx.compose.animation.fadeIn
+import androidx.compose.animation.fadeOut
+import androidx.compose.animation.slideInVertically
+import androidx.compose.animation.slideOutVertically
+import androidx.compose.animation.togetherWith
 import androidx.compose.foundation.BorderStroke
+import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.background
+import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.Arrangement
@@ -58,22 +75,32 @@ import androidx.compose.material3.OutlinedTextFieldDefaults
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
-import androidx.compose.ui.graphics.Color
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.alpha
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.geometry.CornerRadius
+import androidx.compose.ui.geometry.Offset
+import androidx.compose.ui.geometry.Size
+import androidx.compose.ui.graphics.Brush
+import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.graphicsLayer
+import androidx.compose.ui.platform.LocalView
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextDecoration
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.unit.sp
 import com.example.data.local.CategoryEntity
 import com.example.data.local.CategoryType
 import com.example.data.local.TransactionEntity
@@ -94,6 +121,8 @@ import com.example.ui.theme.CandyLimeGreen
 import com.example.ui.theme.CandyOrange
 import com.example.ui.theme.CandySkyBlue
 import com.example.ui.theme.CandySunshineYellow
+import com.example.ui.theme.CondensedCardTitleStyle
+import com.example.ui.theme.CondensedScreenTitleStyle
 import com.example.ui.theme.DarkCandyCardPalette
 import com.example.ui.theme.EditorialAqua
 import com.example.ui.theme.EditorialCardPalette
@@ -102,18 +131,21 @@ import com.example.ui.theme.EditorialLavender
 import com.example.ui.theme.EditorialPink
 import com.example.ui.theme.InkBlack
 import com.example.ui.theme.LimeAccent
+import com.example.ui.theme.LocalReducedMotion
+import com.example.ui.theme.Motion
 import com.example.ui.theme.PastelBeige
 import com.example.ui.theme.PastelCyan
 import com.example.ui.theme.PastelPink
 import com.example.ui.theme.PureWhite
-import androidx.compose.ui.unit.sp
-import com.example.ui.theme.CondensedCardTitleStyle
-import com.example.ui.theme.CondensedScreenTitleStyle
 import com.example.ui.theme.SnapSpendThemeTokens
 import com.example.ui.theme.SunnyYellow
 import com.example.ui.theme.WarningAmber
+import com.example.ui.theme.dialogScaleFadeEntrance
+import com.example.ui.theme.staggeredItemReveal
 import com.example.util.MoneyUtils
 import java.util.Locale
+import kotlinx.coroutines.delay
+import kotlinx.coroutines.launch
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -155,8 +187,11 @@ fun QuickAddSourceBottomSheet(
             )
 
             // 0. Quick Scan with Camera (Sunny Yellow 3D Featured Card)
+            val view = LocalView.current
             Editorial3DLayerBox(
-                modifier = Modifier.fillMaxWidth(),
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .staggeredItemReveal(index = 0, staggerMs = Motion.STAGGER_SHEET_MS),
                 shape = RoundedCornerShape(28.dp),
                 depthX = 3.dp,
                 depthY = 5.dp,
@@ -165,6 +200,7 @@ fun QuickAddSourceBottomSheet(
             ) {
                 Surface(
                     onClick = {
+                        Motion.performLightTapHaptic(view)
                         onDismiss()
                         onCameraQuickScan()
                     },
@@ -211,7 +247,9 @@ fun QuickAddSourceBottomSheet(
 
             // 1. Scan Payment Screenshot(s) (Pink #FF9EC7 3D Card with Black Text)
             Editorial3DLayerBox(
-                modifier = Modifier.fillMaxWidth(),
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .staggeredItemReveal(index = 1, staggerMs = Motion.STAGGER_SHEET_MS),
                 shape = RoundedCornerShape(28.dp),
                 depthX = 3.dp,
                 depthY = 5.dp,
@@ -220,6 +258,7 @@ fun QuickAddSourceBottomSheet(
             ) {
                 Surface(
                     onClick = {
+                        Motion.performLightTapHaptic(view)
                         onDismiss()
                         onPickScreenshots()
                     },
@@ -267,7 +306,9 @@ fun QuickAddSourceBottomSheet(
 
             // 2. Natural-Language Text or Voice Note to Expense Draft (Coral #FF6F59 3D Card)
             Editorial3DLayerBox(
-                modifier = Modifier.fillMaxWidth(),
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .staggeredItemReveal(index = 2, staggerMs = Motion.STAGGER_SHEET_MS),
                 shape = RoundedCornerShape(28.dp),
                 depthX = 3.dp,
                 depthY = 5.dp,
@@ -276,6 +317,7 @@ fun QuickAddSourceBottomSheet(
             ) {
                 Surface(
                     onClick = {
+                        Motion.performLightTapHaptic(view)
                         onDismiss()
                         onAiQuickNote()
                     },
@@ -322,7 +364,9 @@ fun QuickAddSourceBottomSheet(
 
             // 3. Scan Payment PDF Statement (Aqua #8FE3F0 3D Card)
             Editorial3DLayerBox(
-                modifier = Modifier.fillMaxWidth(),
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .staggeredItemReveal(index = 3, staggerMs = Motion.STAGGER_SHEET_MS),
                 shape = RoundedCornerShape(28.dp),
                 depthX = 3.dp,
                 depthY = 5.dp,
@@ -331,6 +375,7 @@ fun QuickAddSourceBottomSheet(
             ) {
                 Surface(
                     onClick = {
+                        Motion.performLightTapHaptic(view)
                         onDismiss()
                         onPickPdf()
                     },
@@ -377,7 +422,9 @@ fun QuickAddSourceBottomSheet(
 
             // 4. Add by Hand (Strong Lavender #C9A0FF 3D Card)
             Editorial3DLayerBox(
-                modifier = Modifier.fillMaxWidth(),
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .staggeredItemReveal(index = 4, staggerMs = Motion.STAGGER_SHEET_MS),
                 shape = RoundedCornerShape(28.dp),
                 depthX = 3.dp,
                 depthY = 5.dp,
@@ -386,6 +433,7 @@ fun QuickAddSourceBottomSheet(
             ) {
                 Surface(
                     onClick = {
+                        Motion.performLightTapHaptic(view)
                         onDismiss()
                         onManualAdd()
                     },
@@ -466,6 +514,7 @@ fun AiNaturalLanguageNoteDialog(
 
     AlertDialog(
         onDismissRequest = onDismiss,
+        modifier = Modifier.dialogScaleFadeEntrance(),
         containerColor = tokens.cardSurface,
         titleContentColor = tokens.primaryText,
         textContentColor = tokens.primaryText,
@@ -641,44 +690,202 @@ fun AiReviewDeckOverlay(
                 is ScanUiState.Idle -> Unit
 
                 is ScanUiState.Reading -> {
+                    val reducedMotion = LocalReducedMotion.current
+                    val cyclingMessages = remember {
+                        listOf("Reading amount…", "Finding the date…", "Picking a category…")
+                    }
+                    var statusIdx by remember { mutableIntStateOf(0) }
+                    LaunchedEffect(scanState) {
+                        while (true) {
+                            delay(Motion.STATUS_CYCLE_MS)
+                            statusIdx = (statusIdx + 1) % cyclingMessages.size
+                        }
+                    }
+
+                    val infiniteTransition = rememberInfiniteTransition(label = "ai_scan_shimmer_and_laser")
+                    val shimmerProgress by infiniteTransition.animateFloat(
+                        initialValue = -0.5f,
+                        targetValue = 1.5f,
+                        animationSpec = infiniteRepeatable(
+                            animation = tween(durationMillis = if (reducedMotion) 1 else 1400, easing = LinearEasing),
+                            repeatMode = RepeatMode.Restart
+                        ),
+                        label = "shimmer_sweep"
+                    )
+                    val laserYFraction by infiniteTransition.animateFloat(
+                        initialValue = 0.08f,
+                        targetValue = 0.92f,
+                        animationSpec = infiniteRepeatable(
+                            animation = tween(durationMillis = if (reducedMotion) 1 else 1250, easing = FastOutSlowInEasing),
+                            repeatMode = RepeatMode.Reverse
+                        ),
+                        label = "laser_scan_line"
+                    )
+
                     Box(
                         modifier = Modifier
                             .fillMaxSize()
                             .padding(24.dp),
                         contentAlignment = Alignment.Center
                     ) {
-                        Surface(
+                        Editorial3DLayerBox(
                             modifier = Modifier.fillMaxWidth(),
                             shape = RoundedCornerShape(32.dp),
-                            color = if (isDark) CandyLimeGreen else LimeAccent,
-                            border = BorderStroke(2.dp, BrightCardBlack)
+                            depthX = 4.dp,
+                            depthY = 6.dp,
+                            extrusionColor = InkBlack
                         ) {
-                            Column(
-                                modifier = Modifier.padding(32.dp),
-                                horizontalAlignment = Alignment.CenterHorizontally,
-                                verticalArrangement = Arrangement.spacedBy(16.dp)
+                            Surface(
+                                modifier = Modifier.fillMaxWidth(),
+                                shape = RoundedCornerShape(32.dp),
+                                color = if (isDark) CandyLimeGreen else LimeAccent,
+                                border = BorderStroke(2.dp, BrightCardBlack)
                             ) {
-                                CircularProgressIndicator(
-                                    modifier = Modifier.size(56.dp),
-                                    color = BrightCardBlack,
-                                    strokeWidth = 5.dp
-                                )
-                                Text(
-                                    text = scanState.statusText,
-                                    style = MaterialTheme.typography.headlineMedium.copy(fontWeight = FontWeight.Black),
-                                    color = BrightCardBlack,
-                                    textAlign = TextAlign.Center
-                                )
-                                StatusPillBadge(
-                                    text = "Step ${scanState.currentStep} of ${scanState.totalSteps} · Parallel AI Scan",
-                                    backgroundColor = PureWhite
-                                )
+                                Box(modifier = Modifier.fillMaxWidth()) {
+                                    // Soft diagonal light shimmer sweep across the reading card
+                                    if (!reducedMotion) {
+                                        Canvas(modifier = Modifier.matchParentSize()) {
+                                            val startX = size.width * shimmerProgress
+                                            drawRect(
+                                                brush = Brush.linearGradient(
+                                                    colors = listOf(
+                                                        Color.Transparent,
+                                                        PureWhite.copy(alpha = 0.36f),
+                                                        Color.Transparent
+                                                    ),
+                                                    start = Offset(startX - size.width * 0.35f, 0f),
+                                                    end = Offset(startX + size.width * 0.35f, size.height)
+                                                )
+                                            )
+                                        }
+                                    }
+
+                                    Column(
+                                        modifier = Modifier.padding(28.dp),
+                                        horizontalAlignment = Alignment.CenterHorizontally,
+                                        verticalArrangement = Arrangement.spacedBy(16.dp)
+                                    ) {
+                                        // Receipt preview box with horizontal laser scanning line moving up and down
+                                        Box(
+                                            modifier = Modifier
+                                                .fillMaxWidth()
+                                                .height(110.dp)
+                                                .clip(RoundedCornerShape(20.dp))
+                                                .background(PureWhite)
+                                                .border(1.8.dp, BrightCardBlack, RoundedCornerShape(20.dp))
+                                        ) {
+                                            Canvas(modifier = Modifier.fillMaxSize()) {
+                                                val padX = 20.dp.toPx()
+                                                val lineH = 8.dp.toPx()
+                                                // Skeleton receipt placeholder lines
+                                                drawRoundRect(
+                                                    color = InkBlack.copy(alpha = 0.14f),
+                                                    topLeft = Offset(padX, size.height * 0.22f),
+                                                    size = Size(size.width * 0.46f, lineH),
+                                                    cornerRadius = CornerRadius(6f, 6f)
+                                                )
+                                                drawRoundRect(
+                                                    color = InkBlack.copy(alpha = 0.10f),
+                                                    topLeft = Offset(padX, size.height * 0.46f),
+                                                    size = Size(size.width * 0.72f, lineH),
+                                                    cornerRadius = CornerRadius(6f, 6f)
+                                                )
+                                                drawRoundRect(
+                                                    color = InkBlack.copy(alpha = 0.14f),
+                                                    topLeft = Offset(padX, size.height * 0.70f),
+                                                    size = Size(size.width * 0.34f, lineH),
+                                                    cornerRadius = CornerRadius(6f, 6f)
+                                                )
+
+                                                // Moving horizontal scanning line
+                                                val scanY = size.height * (if (reducedMotion) 0.5f else laserYFraction)
+                                                drawRect(
+                                                    brush = Brush.verticalGradient(
+                                                        colors = listOf(
+                                                            Color.Transparent,
+                                                            EditorialCoral.copy(alpha = 0.28f),
+                                                            Color.Transparent
+                                                        ),
+                                                        startY = scanY - 14.dp.toPx(),
+                                                        endY = scanY + 14.dp.toPx()
+                                                    ),
+                                                    topLeft = Offset(0f, (scanY - 14.dp.toPx()).coerceAtLeast(0f)),
+                                                    size = Size(size.width, 28.dp.toPx())
+                                                )
+                                                drawLine(
+                                                    color = EditorialCoral,
+                                                    start = Offset(8.dp.toPx(), scanY),
+                                                    end = Offset(size.width - 8.dp.toPx(), scanY),
+                                                    strokeWidth = 3.dp.toPx()
+                                                )
+                                            }
+                                        }
+
+                                        CircularProgressIndicator(
+                                            modifier = Modifier.size(44.dp),
+                                            color = BrightCardBlack,
+                                            strokeWidth = 4.5.dp
+                                        )
+
+                                        // Cycling status message ("Reading amount…" -> "Finding the date…" -> "Picking a category…")
+                                        AnimatedContent(
+                                            targetState = cyclingMessages[statusIdx],
+                                            transitionSpec = {
+                                                (fadeIn(Motion.quickTween(reducedMotion)) +
+                                                    slideInVertically(Motion.quickIntOffsetTween(reducedMotion)) { it / 2 })
+                                                    .togetherWith(
+                                                        fadeOut(Motion.quickTween(reducedMotion)) +
+                                                            slideOutVertically(Motion.quickIntOffsetTween(reducedMotion)) { -it / 2 }
+                                                    )
+                                            },
+                                            label = "ai_scan_status_cycle"
+                                        ) { cyclingLabel ->
+                                            Text(
+                                                text = cyclingLabel,
+                                                style = MaterialTheme.typography.headlineMedium.copy(fontWeight = FontWeight.Black),
+                                                color = BrightCardBlack,
+                                                textAlign = TextAlign.Center
+                                            )
+                                        }
+
+                                        Text(
+                                            text = scanState.statusText,
+                                            style = MaterialTheme.typography.bodyMedium.copy(fontWeight = FontWeight.Bold),
+                                            color = BrightCardBlack.copy(alpha = 0.78f),
+                                            textAlign = TextAlign.Center
+                                        )
+
+                                        StatusPillBadge(
+                                            text = "Step ${scanState.currentStep} of ${scanState.totalSteps} · Parallel AI Scan",
+                                            backgroundColor = PureWhite
+                                        )
+                                    }
+                                }
                             }
                         }
                     }
                 }
 
                 is ScanUiState.Unreadable -> {
+                    val reducedMotion = LocalReducedMotion.current
+                    val shakeOffset = remember { Animatable(0f) }
+                    LaunchedEffect(scanState) {
+                        if (!reducedMotion) {
+                            shakeOffset.animateTo(
+                                targetValue = 0f,
+                                animationSpec = keyframes {
+                                    durationMillis = 360
+                                    0f at 0
+                                    (-12f) at 50
+                                    12f at 110
+                                    (-8f) at 170
+                                    8f at 230
+                                    (-4f) at 290
+                                    0f at 360
+                                }
+                            )
+                        }
+                    }
                     Box(
                         modifier = Modifier
                             .fillMaxSize()
@@ -686,7 +893,11 @@ fun AiReviewDeckOverlay(
                         contentAlignment = Alignment.Center
                     ) {
                         Surface(
-                            modifier = Modifier.fillMaxWidth(),
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .graphicsLayer {
+                                    translationX = shakeOffset.value.dp.toPx()
+                                },
                             shape = RoundedCornerShape(32.dp),
                             color = if (isDark) CandyOrange else PastelPink,
                             border = BorderStroke(2.dp, BrightCardBlack)
@@ -724,6 +935,25 @@ fun AiReviewDeckOverlay(
                 }
 
                 is ScanUiState.Error -> {
+                    val reducedMotion = LocalReducedMotion.current
+                    val shakeOffset = remember { Animatable(0f) }
+                    LaunchedEffect(scanState) {
+                        if (!reducedMotion) {
+                            shakeOffset.animateTo(
+                                targetValue = 0f,
+                                animationSpec = keyframes {
+                                    durationMillis = 360
+                                    0f at 0
+                                    (-12f) at 50
+                                    12f at 110
+                                    (-8f) at 170
+                                    8f at 230
+                                    (-4f) at 290
+                                    0f at 360
+                                }
+                            )
+                        }
+                    }
                     Box(
                         modifier = Modifier
                             .fillMaxSize()
@@ -731,7 +961,11 @@ fun AiReviewDeckOverlay(
                         contentAlignment = Alignment.Center
                     ) {
                         Surface(
-                            modifier = Modifier.fillMaxWidth(),
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .graphicsLayer {
+                                    translationX = shakeOffset.value.dp.toPx()
+                                },
                             shape = RoundedCornerShape(32.dp),
                             color = if (isDark) CandySunshineYellow else WarningAmber,
                             border = BorderStroke(2.dp, BrightCardBlack)
@@ -789,6 +1023,11 @@ fun AiReviewDeckOverlay(
                 is ScanUiState.ReviewReady -> {
                     val drafts = scanState.drafts
                     val activeCount = drafts.count { !it.isSkipped }
+                    val reducedMotion = LocalReducedMotion.current
+                    val view = LocalView.current
+                    val coroutineScope = rememberCoroutineScope()
+                    val confirmPopScale = remember { Animatable(1f) }
+                    var isConfirmAnimating by remember { mutableStateOf(false) }
 
                     LazyColumn(
                         modifier = Modifier
@@ -824,6 +1063,7 @@ fun AiReviewDeckOverlay(
                             Editorial3DLayerBox(
                                 modifier = Modifier
                                     .fillMaxWidth()
+                                    .staggeredItemReveal(index = idx, staggerMs = Motion.STAGGER_ITEM_MS)
                                     .alpha(if (draft.isSkipped) 0.65f else 1f),
                                 shape = RoundedCornerShape(28.dp),
                                 depthX = 4.dp,
@@ -1196,8 +1436,34 @@ fun AiReviewDeckOverlay(
                             }
 
                             Button(
-                                onClick = onConfirmAll,
-                                modifier = Modifier.testTag("confirm_all_drafts_button"),
+                                onClick = {
+                                    if (!isConfirmAnimating) {
+                                        Motion.performLightTapHaptic(view)
+                                        if (reducedMotion) {
+                                            onConfirmAll()
+                                        } else {
+                                            isConfirmAnimating = true
+                                            coroutineScope.launch {
+                                                confirmPopScale.animateTo(
+                                                    targetValue = 1.22f,
+                                                    animationSpec = tween(durationMillis = 100, easing = FastOutSlowInEasing)
+                                                )
+                                                confirmPopScale.animateTo(
+                                                    targetValue = 1f,
+                                                    animationSpec = Motion.popSpring(reducedMotion)
+                                                )
+                                                isConfirmAnimating = false
+                                                onConfirmAll()
+                                            }
+                                        }
+                                    }
+                                },
+                                modifier = Modifier
+                                    .graphicsLayer {
+                                        scaleX = confirmPopScale.value
+                                        scaleY = confirmPopScale.value
+                                    }
+                                    .testTag("confirm_all_drafts_button"),
                                 shape = CircleShape,
                                 colors = ButtonDefaults.buttonColors(
                                     containerColor = if (isDark) CandyLimeGreen else LimeAccent,
@@ -1206,7 +1472,15 @@ fun AiReviewDeckOverlay(
                                 border = BorderStroke(2.dp, BrightCardBlack),
                                 contentPadding = PaddingValues(horizontal = 24.dp, vertical = 14.dp)
                             ) {
-                                Icon(Icons.Default.Check, contentDescription = null, tint = BrightCardBlack)
+                                Icon(
+                                    imageVector = Icons.Default.Check,
+                                    contentDescription = null,
+                                    tint = BrightCardBlack,
+                                    modifier = Modifier.graphicsLayer {
+                                        scaleX = confirmPopScale.value
+                                        scaleY = confirmPopScale.value
+                                    }
+                                )
                                 Spacer(modifier = Modifier.width(8.dp))
                                 Text(
                                     text = "Confirm all",
@@ -1267,6 +1541,7 @@ private fun DraftEditDialog(
 
     AlertDialog(
         onDismissRequest = onDismiss,
+        modifier = Modifier.dialogScaleFadeEntrance(),
         containerColor = tokens.cardSurface,
         titleContentColor = tokens.primaryText,
         textContentColor = tokens.primaryText,
@@ -1489,6 +1764,7 @@ fun TransactionEditorDialog(
 
     AlertDialog(
         onDismissRequest = onDismiss,
+        modifier = Modifier.dialogScaleFadeEntrance(),
         containerColor = tokens.cardSurface,
         titleContentColor = tokens.primaryText,
         textContentColor = tokens.primaryText,

@@ -48,6 +48,7 @@ import com.example.data.local.TransactionType
 import com.example.ui.DateRangeFilter
 import com.example.ui.SnapSpendUiState
 import com.example.ui.components.DarkLiveInsightCard
+import com.example.ui.components.Editorial3DLayerBox
 import com.example.ui.components.PaleMintIllustratedHeroCard
 import com.example.ui.components.SeparatedPastelTransactionList
 import com.example.ui.components.TinySectionLabel
@@ -63,11 +64,15 @@ import com.example.ui.theme.EditorialAqua
 import com.example.ui.theme.EditorialCoral
 import com.example.ui.theme.EditorialLavender
 import com.example.ui.theme.InkBlack
+import com.example.ui.theme.LocalReducedMotion
+import com.example.ui.theme.MarkScreenEntrancePlayedEffect
+import com.example.ui.theme.Motion
 import com.example.ui.theme.PaleMintHero
 import com.example.ui.theme.PureWhite
 import com.example.ui.theme.SecondaryGreyText
 import com.example.ui.theme.SnapSpendThemeTokens
 import com.example.ui.theme.SunnyYellow
+import com.example.ui.theme.staggeredScreenEntrance
 import com.example.util.MoneyUtils
 
 @Composable
@@ -120,6 +125,9 @@ fun TransactionsScreen(
         "${uiState.filteredTransactions.size} payments totaling ${MoneyUtils.formatPaise(matchingTotalPaise)} in the selected view."
     }
 
+    val reducedMotion = LocalReducedMotion.current
+    MarkScreenEntrancePlayedEffect(screenKey = "transactions")
+
     LazyColumn(
         modifier = modifier
             .fillMaxSize()
@@ -134,7 +142,10 @@ fun TransactionsScreen(
     ) {
         // 1. REPORTS Header + White Pill Dropdown ("This Month v") + Pale Mint Illustrated Hero Area (only when empty)
         item(key = "tx_header") {
-            Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
+            Column(
+                modifier = Modifier.staggeredScreenEntrance(screenKey = "transactions", index = 0),
+                verticalArrangement = Arrangement.spacedBy(12.dp)
+            ) {
                 UppercaseScreenHeader(
                     title = "TRANSACTIONS",
                     leadingIcon = Icons.AutoMirrored.Filled.FormatListBulleted,
@@ -177,7 +188,10 @@ fun TransactionsScreen(
 
         // 2. Search Pill with Filter Icon directly below the Pale Mint Hero Area
         item(key = "tx_search_and_filter_bar") {
-            Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+            Column(
+                modifier = Modifier.staggeredScreenEntrance(screenKey = "transactions", index = 1),
+                verticalArrangement = Arrangement.spacedBy(8.dp)
+            ) {
                 OutlinedTextField(
                     value = filters.searchQuery,
                     onValueChange = onSearchQueryChange,
@@ -276,7 +290,10 @@ fun TransactionsScreen(
 
         // 3. LIVE INSIGHTS Card on Transactions screen in Strong Lavender (#C9A0FF)
         item(key = "reports_live_insight") {
-            Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
+            Column(
+                modifier = Modifier.staggeredScreenEntrance(screenKey = "transactions", index = 2),
+                verticalArrangement = Arrangement.spacedBy(10.dp)
+            ) {
                 TinySectionLabel(text = "LIVE INSIGHTS")
                 DarkLiveInsightCard(
                     title = liveReportTitle,
@@ -294,29 +311,41 @@ fun TransactionsScreen(
         // 4. Day-grouped payment cards (or Pale Mint empty state card)
         if (uiState.groupedTransactions.isEmpty()) {
             item(key = "tx_empty_state") {
-                Surface(
-                    modifier = Modifier.fillMaxWidth(),
-                    shape = RoundedCornerShape(28.dp),
-                    color = PaleMintHero,
-                    contentColor = InkBlack,
-                    border = BorderStroke(1.5.dp, InkBlack)
+                val emptyShape = RoundedCornerShape(28.dp)
+                Editorial3DLayerBox(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .staggeredScreenEntrance(screenKey = "transactions", index = 3),
+                    shape = emptyShape,
+                    extrusionColor = InkBlack,
+                    extrusionBorderColor = InkBlack,
+                    depthX = 4.dp,
+                    depthY = 6.dp
                 ) {
-                    Column(modifier = Modifier.padding(24.dp)) {
-                        Text(
-                            text = if (hasActiveFilter) "NO MATCHING PAYMENTS" else "YOUR LIST IS EMPTY",
-                            style = CondensedCardTitleStyle.copy(fontSize = 26.sp),
-                            color = InkBlack
-                        )
-                        Spacer(modifier = Modifier.height(6.dp))
-                        Text(
-                            text = if (hasActiveFilter) {
-                                "Try resetting your filters or search query to see all saved payments."
-                            } else {
-                                "Tap the + button below to scan a screenshot, speak a note, or add by hand."
-                            },
-                            style = MaterialTheme.typography.bodyLarge.copy(fontWeight = FontWeight.SemiBold),
-                            color = InkBlack.copy(alpha = 0.82f)
-                        )
+                    Surface(
+                        modifier = Modifier.fillMaxWidth(),
+                        shape = emptyShape,
+                        color = PaleMintHero,
+                        contentColor = InkBlack,
+                        border = BorderStroke(1.5.dp, InkBlack)
+                    ) {
+                        Column(modifier = Modifier.padding(24.dp)) {
+                            Text(
+                                text = if (hasActiveFilter) "NO MATCHING PAYMENTS" else "YOUR LIST IS EMPTY",
+                                style = CondensedCardTitleStyle.copy(fontSize = 26.sp),
+                                color = InkBlack
+                            )
+                            Spacer(modifier = Modifier.height(6.dp))
+                            Text(
+                                text = if (hasActiveFilter) {
+                                    "Try resetting your filters or search query to see all saved payments."
+                                } else {
+                                    "Tap the + button below to scan a screenshot, speak a note, or add by hand."
+                                },
+                                style = MaterialTheme.typography.bodyLarge.copy(fontWeight = FontWeight.SemiBold),
+                                color = InkBlack.copy(alpha = 0.82f)
+                            )
+                        }
                     }
                 }
             }
@@ -325,7 +354,15 @@ fun TransactionsScreen(
                 items = uiState.groupedTransactions,
                 key = { _, (dayHeader, _) -> "header_$dayHeader" }
             ) { groupIdx, (dayHeader, dayList) ->
-                Column(modifier = Modifier.animateItem()) {
+                Column(
+                    modifier = Modifier
+                        .animateItem(
+                            fadeInSpec = Motion.normalTween(reducedMotion),
+                            placementSpec = Motion.physicalIntOffsetSpring(reducedMotion),
+                            fadeOutSpec = Motion.quickTween(reducedMotion)
+                        )
+                        .staggeredScreenEntrance(screenKey = "transactions", index = 3 + groupIdx)
+                ) {
                     TinySectionLabel(
                         text = dayHeader,
                         modifier = Modifier.padding(bottom = 8.dp)

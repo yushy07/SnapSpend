@@ -1,13 +1,23 @@
 package com.example.ui.components
 
+import androidx.compose.animation.AnimatedContent
+import androidx.compose.animation.core.Animatable
 import androidx.compose.animation.core.Spring
+import androidx.compose.animation.core.animateDpAsState
 import androidx.compose.animation.core.animateFloatAsState
 import androidx.compose.animation.core.spring
+import androidx.compose.animation.fadeIn
+import androidx.compose.animation.fadeOut
+import androidx.compose.animation.scaleIn
+import androidx.compose.animation.scaleOut
+import androidx.compose.animation.togetherWith
 import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.interaction.MutableInteractionSource
+import androidx.compose.foundation.interaction.collectIsPressedAsState
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -31,8 +41,10 @@ import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableIntStateOf
+import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
@@ -47,9 +59,12 @@ import androidx.compose.ui.graphics.Path
 import androidx.compose.ui.graphics.PathEffect
 import androidx.compose.ui.graphics.StrokeCap
 import androidx.compose.ui.graphics.StrokeJoin
+import androidx.compose.ui.graphics.TransformOrigin
 import androidx.compose.ui.graphics.drawscope.Stroke
+import androidx.compose.ui.graphics.drawscope.clipRect
 import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.layout.layout
+import androidx.compose.ui.platform.LocalView
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
@@ -74,6 +89,8 @@ import com.example.ui.theme.EditorialMint
 import com.example.ui.theme.FadedCoralBar
 import com.example.ui.theme.InkBlack
 import com.example.ui.theme.LighterCoral
+import com.example.ui.theme.LocalReducedMotion
+import com.example.ui.theme.Motion
 import com.example.ui.theme.PaleLavenderTint
 import com.example.ui.theme.PaleMintHero
 import com.example.ui.theme.PaleMintTint
@@ -85,10 +102,12 @@ import com.example.ui.theme.SnapSpendThemeTokens
 import com.example.ui.theme.SunnyYellow
 import com.example.ui.theme.TrueBlackBg
 import com.example.ui.theme.parseEditorialColor
+import com.example.ui.theme.rememberAnimatedPaise
 import com.example.util.MoneyUtils
 import java.text.SimpleDateFormat
 import java.util.Date
 import java.util.Locale
+import kotlinx.coroutines.delay
 
 /**
  * Custom layout modifier that rotates a label -90 degrees AND swaps its measured width & height
@@ -148,6 +167,9 @@ fun SpendingOverTimeAreaChartCard(
         }
     }
 
+    val view = LocalView.current
+    val reducedMotion = LocalReducedMotion.current
+
     val hasAnySpend = entries.any { it.amountPaise > 0L }
     val peakIndex = if (hasAnySpend) {
         entries.indices.maxByOrNull { entries[it].amountPaise } ?: 0
@@ -156,6 +178,48 @@ fun SpendingOverTimeAreaChartCard(
     }
     var selectedDayIndex by remember(entries) { mutableIntStateOf(peakIndex.coerceIn(0, 6)) }
     val cardShape = RoundedCornerShape(28.dp)
+
+    // Progressive Area Chart entrance:
+    // 1) Stroke line draws from left to right (0f -> 1f over CHART_MS)
+    // 2) Area fill beneath it fades in smoothly right after (0f -> 1f over NORMAL_MS)
+    val lineDrawProgress = remember { Animatable(if (reducedMotion) 1f else 0f) }
+    val areaFillAlpha = remember { Animatable(if (reducedMotion) 1f else 0f) }
+    LaunchedEffect(reducedMotion) {
+        if (reducedMotion) {
+            lineDrawProgress.snapTo(1f)
+            areaFillAlpha.snapTo(1f)
+        } else {
+            lineDrawProgress.snapTo(0f)
+            areaFillAlpha.snapTo(0f)
+            lineDrawProgress.animateTo(
+                targetValue = 1f,
+                animationSpec = Motion.chartTween(reducedMotion = false)
+            )
+            areaFillAlpha.animateTo(
+                targetValue = 1f,
+                animationSpec = Motion.normalTween(reducedMotion = false)
+            )
+        }
+    }
+
+    val maxAmount = (entries.maxOfOrNull { it.amountPaise } ?: 0L)
+        .coerceAtLeast(monthlyBudgetAveragePaise)
+        .coerceAtLeast(1L)
+
+    // Smoothly interpolate each day's normalized height when switching filters (e.g. This Week <-> This Month)
+    val animatedDayHeights = entries.mapIndexed { idx, item ->
+        val targetNorm = if (hasAnySpend && maxAmount > 0L) {
+            (item.amountPaise.toFloat() / maxAmount.toFloat()).coerceIn(0.14f, 0.90f)
+        } else {
+            0.14f
+        }
+        val animVal by animateFloatAsState(
+            targetValue = targetNorm,
+            animationSpec = Motion.physicalSpring(reducedMotion),
+            label = "areaDayNorm_$idx"
+        )
+        animVal
+    }
 
     Editorial3DLayerBox(
         modifier = modifier
@@ -214,11 +278,26 @@ fun SpendingOverTimeAreaChartCard(
                 ) {
                     entries.forEachIndexed { idx, dayItem ->
                         val isSelected = idx == selectedDayIndex
+                        val dayInteractionSource = remember { MutableInteractionSource() }
+                        val isDayPressed by dayInteractionSource.collectIsPressedAsState()
+                        val dayPressFraction by animateFloatAsState(
+                            targetValue = if (isDayPressed) 1f else 0f,
+                            animationSpec = Motion.pressSpring(reducedMotion),
+                            label = "dayChipPress_$idx"
+                        )
+                        val dayShiftX = 2.dp * dayPressFraction
+                        val dayShiftY = 3.dp * dayPressFraction
                         Column(
                             horizontalAlignment = Alignment.CenterHorizontally,
                             modifier = Modifier
                                 .weight(1f)
-                                .clickable { selectedDayIndex = idx }
+                                .clickable(
+                                    interactionSource = dayInteractionSource,
+                                    indication = null
+                                ) {
+                                    Motion.performLightTapHaptic(view)
+                                    selectedDayIndex = idx
+                                }
                                 .testTag("area_chart_day_chip_${dayItem.dayShort.lowercase()}")
                         ) {
                             Text(
@@ -242,6 +321,7 @@ fun SpendingOverTimeAreaChartCard(
                                 Box(
                                     modifier = Modifier
                                         .size(38.dp)
+                                        .offset(x = dayShiftX, y = dayShiftY)
                                         .clip(CircleShape)
                                         .background(
                                             when {
@@ -276,10 +356,6 @@ fun SpendingOverTimeAreaChartCard(
                 Spacer(modifier = Modifier.height(14.dp))
 
                 // 3D Coral (#FF6F59) Area Chart with Extruded 3D Side Wall & Dashed Horizontal Target Line
-                val maxAmount = (entries.maxOfOrNull { it.amountPaise } ?: 0L)
-                    .coerceAtLeast(monthlyBudgetAveragePaise)
-                    .coerceAtLeast(1L)
-
                 Canvas(
                     modifier = Modifier
                         .fillMaxWidth()
@@ -294,102 +370,112 @@ fun SpendingOverTimeAreaChartCard(
                     val usableH = (h - depthDy).coerceAtLeast(1f)
                     val stepX = if (entries.size > 1) usableW / (entries.size - 1) else usableW
 
-                    val points = entries.mapIndexed { index, item ->
+                    val points = entries.indices.map { index ->
                         val x = index * stepX
-                        val normalized = if (hasAnySpend && maxAmount > 0L) {
-                            (item.amountPaise.toFloat() / maxAmount.toFloat()).coerceIn(0.14f, 0.90f)
-                        } else {
-                            0.14f
-                        }
+                        val normalized = animatedDayHeights.getOrElse(index) { 0.14f }
                         Offset(x, usableH - normalized * usableH)
                     }
 
-                    // 1. 3D Extruded Back/Bottom Shadow Area Polygon (shifted by +depthDx, +depthDy)
-                    val shadowAreaPath = Path().apply {
-                        moveTo(points.first().x + depthDx, usableH + depthDy)
-                        points.forEach { pt ->
-                            lineTo(pt.x + depthDx, pt.y + depthDy)
-                        }
-                        lineTo(points.last().x + depthDx, usableH + depthDy)
-                        close()
-                    }
-                    drawPath(
-                        path = shadowAreaPath,
-                        color = InkBlack.copy(alpha = 0.85f)
-                    )
+                    val currentFillAlpha = areaFillAlpha.value.coerceIn(0f, 1f)
+                    val currentLineDraw = lineDrawProgress.value.coerceIn(0f, 1f)
 
-                    // 2. 3D Top Extrusion Ribbon connecting front curve to back 3D curve
-                    for (i in 0 until points.lastIndex) {
-                        val p1 = points[i]
-                        val p2 = points[i + 1]
-                        val ribbonQuad = Path().apply {
-                            moveTo(p1.x, p1.y)
-                            lineTo(p2.x, p2.y)
-                            lineTo(p2.x + depthDx, p2.y + depthDy)
-                            lineTo(p1.x + depthDx, p1.y + depthDy)
+                    if (currentFillAlpha > 0.01f) {
+                        // 1. 3D Extruded Back/Bottom Shadow Area Polygon (shifted by +depthDx, +depthDy)
+                        val shadowAreaPath = Path().apply {
+                            moveTo(points.first().x + depthDx, usableH + depthDy)
+                            points.forEach { pt ->
+                                lineTo(pt.x + depthDx, pt.y + depthDy)
+                            }
+                            lineTo(points.last().x + depthDx, usableH + depthDy)
                             close()
                         }
                         drawPath(
-                            path = ribbonQuad,
-                            color = Color(0xFFC84632) // Deep 3D Coral side bevel
+                            path = shadowAreaPath,
+                            color = InkBlack.copy(alpha = 0.85f * currentFillAlpha)
                         )
-                        drawPath(
-                            path = ribbonQuad,
-                            color = InkBlack,
-                            style = Stroke(width = 1.2.dp.toPx(), join = StrokeJoin.Round)
-                        )
-                    }
 
-                    // 3. Front Coral filled area polygon
-                    val areaPath = Path().apply {
-                        moveTo(points.first().x, usableH)
-                        points.forEach { pt ->
-                            lineTo(pt.x, pt.y)
+                        // 2. 3D Top Extrusion Ribbon connecting front curve to back 3D curve
+                        for (i in 0 until points.lastIndex) {
+                            val p1 = points[i]
+                            val p2 = points[i + 1]
+                            val ribbonQuad = Path().apply {
+                                moveTo(p1.x, p1.y)
+                                lineTo(p2.x, p2.y)
+                                lineTo(p2.x + depthDx, p2.y + depthDy)
+                                lineTo(p1.x + depthDx, p1.y + depthDy)
+                                close()
+                            }
+                            drawPath(
+                                path = ribbonQuad,
+                                color = Color(0xFFC84632).copy(alpha = currentFillAlpha)
+                            )
+                            drawPath(
+                                path = ribbonQuad,
+                                color = InkBlack.copy(alpha = currentFillAlpha),
+                                style = Stroke(width = 1.2.dp.toPx(), join = StrokeJoin.Round)
+                            )
                         }
-                        lineTo(points.last().x, usableH)
-                        close()
-                    }
-                    drawPath(
-                        path = areaPath,
-                        brush = Brush.verticalGradient(
-                            colors = listOf(
-                                EditorialCoral,
-                                LighterCoral.copy(alpha = 0.90f)
+
+                        // 3. Front Coral filled area polygon
+                        val areaPath = Path().apply {
+                            moveTo(points.first().x, usableH)
+                            points.forEach { pt ->
+                                lineTo(pt.x, pt.y)
+                            }
+                            lineTo(points.last().x, usableH)
+                            close()
+                        }
+                        drawPath(
+                            path = areaPath,
+                            brush = Brush.verticalGradient(
+                                colors = listOf(
+                                    EditorialCoral.copy(alpha = currentFillAlpha),
+                                    LighterCoral.copy(alpha = 0.90f * currentFillAlpha)
+                                )
                             )
                         )
-                    )
 
-                    // Subtle 3D vertical prism ribs inside the Coral polygon
-                    points.forEach { pt ->
-                        drawLine(
-                            color = InkBlack.copy(alpha = 0.16f),
-                            start = pt,
-                            end = Offset(pt.x, usableH),
-                            strokeWidth = 1.2.dp.toPx()
-                        )
+                        // Subtle 3D vertical prism ribs inside the Coral polygon
+                        points.forEach { pt ->
+                            drawLine(
+                                color = InkBlack.copy(alpha = 0.16f * currentFillAlpha),
+                                start = pt,
+                                end = Offset(pt.x, usableH),
+                                strokeWidth = 1.2.dp.toPx()
+                            )
+                        }
                     }
 
                     // 4. Vertical guide line under selected day
                     val selectedX = points[selectedDayIndex].x
-                    drawLine(
-                        color = InkBlack.copy(alpha = 0.45f),
-                        start = Offset(selectedX, 0f),
-                        end = Offset(selectedX, usableH),
-                        strokeWidth = 1.5.dp.toPx(),
-                        pathEffect = PathEffect.dashPathEffect(floatArrayOf(8f, 8f), 0f)
-                    )
+                    if (currentLineDraw >= (selectedDayIndex.toFloat() / (entries.size - 1).coerceAtLeast(1))) {
+                        drawLine(
+                            color = InkBlack.copy(alpha = 0.45f),
+                            start = Offset(selectedX, 0f),
+                            end = Offset(selectedX, usableH),
+                            strokeWidth = 1.5.dp.toPx(),
+                            pathEffect = PathEffect.dashPathEffect(floatArrayOf(8f, 8f), 0f)
+                        )
+                    }
 
-                    // 5. Top stroke & specular 3D highlight on the front Coral curve
+                    // 5. Top stroke & specular 3D highlight on the front Coral curve (draws left -> right)
                     val strokePath = Path().apply {
                         points.forEachIndexed { idx, pt ->
                             if (idx == 0) moveTo(pt.x, pt.y) else lineTo(pt.x, pt.y)
                         }
                     }
-                    drawPath(
-                        path = strokePath,
-                        color = InkBlack,
-                        style = Stroke(width = 3.dp.toPx(), cap = StrokeCap.Round, join = StrokeJoin.Round)
-                    )
+                    clipRect(
+                        left = 0f,
+                        top = 0f,
+                        right = w * currentLineDraw,
+                        bottom = h
+                    ) {
+                        drawPath(
+                            path = strokePath,
+                            color = InkBlack,
+                            style = Stroke(width = 3.dp.toPx(), cap = StrokeCap.Round, join = StrokeJoin.Round)
+                        )
+                    }
 
                     // 6. Dashed horizontal line for the monthly budget average target (when set)
                     if (monthlyBudgetAveragePaise > 0L) {
@@ -398,7 +484,7 @@ fun SpendingOverTimeAreaChartCard(
                         drawLine(
                             color = PureWhite,
                             start = Offset(0f, targetY),
-                            end = Offset(usableW, targetY),
+                            end = Offset(usableW * currentLineDraw, targetY),
                             strokeWidth = 2.2.dp.toPx(),
                             pathEffect = PathEffect.dashPathEffect(floatArrayOf(12f, 10f), 0f)
                         )
@@ -406,22 +492,24 @@ fun SpendingOverTimeAreaChartCard(
 
                     // 7. 3D Selected point sphere marker
                     val selPt = points[selectedDayIndex]
-                    drawCircle(
-                        color = InkBlack,
-                        radius = 8.dp.toPx(),
-                        center = Offset(selPt.x + 2.dp.toPx(), selPt.y + 2.dp.toPx())
-                    )
-                    drawCircle(
-                        color = SunnyYellow,
-                        radius = 7.dp.toPx(),
-                        center = selPt
-                    )
-                    drawCircle(
-                        color = InkBlack,
-                        radius = 7.dp.toPx(),
-                        center = selPt,
-                        style = Stroke(width = 2.dp.toPx())
-                    )
+                    if (currentLineDraw >= (selectedDayIndex.toFloat() / (entries.size - 1).coerceAtLeast(1))) {
+                        drawCircle(
+                            color = InkBlack,
+                            radius = 8.dp.toPx(),
+                            center = Offset(selPt.x + 2.dp.toPx(), selPt.y + 2.dp.toPx())
+                        )
+                        drawCircle(
+                            color = SunnyYellow,
+                            radius = 7.dp.toPx(),
+                            center = selPt
+                        )
+                        drawCircle(
+                            color = InkBlack,
+                            radius = 7.dp.toPx(),
+                            center = selPt,
+                            style = Stroke(width = 2.dp.toPx())
+                        )
+                    }
                 }
 
                 if (!hasAnySpend) {
@@ -492,6 +580,8 @@ fun CoralComparisonBarChartCard(
     bars: List<PillBarEntry>,
     modifier: Modifier = Modifier
 ) {
+    val view = LocalView.current
+    val reducedMotion = LocalReducedMotion.current
     val hasNoData = totalSpentPaise <= 0L && bars.all { it.amountPaise <= 0L }
     val resolvedTotalDelta = if (hasNoData && totalDeltaLabel == "0%") "–" else totalDeltaLabel
     val resolvedAvgDelta = if (hasNoData && avgDeltaLabel == "0%") "–" else avgDeltaLabel
@@ -516,6 +606,9 @@ fun CoralComparisonBarChartCard(
     }
     val cardShape = RoundedCornerShape(30.dp)
     val innerBoxShape = RoundedCornerShape(22.dp)
+
+    val animatedTotalSpentText = rememberAnimatedPaise(targetPaise = totalSpentPaise)
+    val animatedAvgPerDayText = rememberAnimatedPaise(targetPaise = avgPerDayPaise)
 
     Editorial3DLayerBox(
         modifier = modifier
@@ -575,7 +668,7 @@ fun CoralComparisonBarChartCard(
                             }
                             Spacer(modifier = Modifier.height(6.dp))
                             ResponsiveTabularNumberText(
-                                text = MoneyUtils.formatPaise(totalSpentPaise),
+                                text = animatedTotalSpentText,
                                 maxFontSize = 42.sp,
                                 minFontSize = 26.sp,
                                 color = InkBlack,
@@ -623,7 +716,7 @@ fun CoralComparisonBarChartCard(
                                 horizontalArrangement = Arrangement.spacedBy(10.dp)
                             ) {
                                 ResponsiveTabularNumberText(
-                                    text = MoneyUtils.formatPaise(avgPerDayPaise),
+                                    text = animatedAvgPerDayText,
                                     maxFontSize = 36.sp,
                                     minFontSize = 22.sp,
                                     color = InkBlack,
@@ -660,20 +753,39 @@ fun CoralComparisonBarChartCard(
                         } else {
                             0.14f
                         }
+
+                        // Staggered bar growth from bottom (30ms apart) + smooth filter interpolation
+                        var barStarted by remember { mutableStateOf(reducedMotion) }
+                        LaunchedEffect(idx, reducedMotion) {
+                            if (reducedMotion) {
+                                barStarted = true
+                            } else if (!barStarted) {
+                                delay((idx * Motion.STAGGER_BAR_MS).toLong())
+                                barStarted = true
+                            }
+                        }
+
                         val animFraction by animateFloatAsState(
-                            targetValue = targetFraction,
-                            animationSpec = spring(
-                                dampingRatio = Spring.DampingRatioMediumBouncy,
-                                stiffness = Spring.StiffnessLow
-                            ),
-                            label = "coral3dBarHeight"
+                            targetValue = if (barStarted) targetFraction else 0.01f,
+                            animationSpec = Motion.physicalSpring(reducedMotion),
+                            label = "coral3dBarHeight_$idx"
+                        )
+
+                        // Selected bar's black tooltip bubble pops in with a bouncy scale spring
+                        val tooltipScale by animateFloatAsState(
+                            targetValue = if (isSelected) 1f else 0f,
+                            animationSpec = Motion.popSpring(reducedMotion),
+                            label = "tooltipScale_$idx"
                         )
 
                         Column(
                             modifier = Modifier
                                 .weight(1f)
                                 .fillMaxHeight()
-                                .clickable { selectedBarIndex = idx }
+                                .clickable {
+                                    Motion.performLightTapHaptic(view)
+                                    selectedBarIndex = idx
+                                }
                                 .testTag("comparison_bar_$idx"),
                             horizontalAlignment = Alignment.CenterHorizontally,
                             verticalArrangement = Arrangement.Bottom
@@ -683,8 +795,17 @@ fun CoralComparisonBarChartCard(
                                 modifier = Modifier.height(36.dp),
                                 contentAlignment = Alignment.BottomCenter
                             ) {
-                                if (isSelected) {
-                                    Box(modifier = Modifier.padding(end = 2.dp, bottom = 2.dp)) {
+                                if (isSelected || tooltipScale > 0.05f) {
+                                    Box(
+                                        modifier = Modifier
+                                            .padding(end = 2.dp, bottom = 2.dp)
+                                            .graphicsLayer {
+                                                scaleX = tooltipScale
+                                                scaleY = tooltipScale
+                                                alpha = tooltipScale.coerceIn(0f, 1f)
+                                                transformOrigin = TransformOrigin(0.5f, 1f)
+                                            }
+                                    ) {
                                         Box(
                                             modifier = Modifier
                                                 .matchParentSize()
@@ -748,7 +869,7 @@ fun CoralComparisonBarChartCard(
                                 Box(
                                     modifier = Modifier
                                         .fillMaxWidth()
-                                        .fillMaxHeight(animFraction)
+                                        .fillMaxHeight(animFraction.coerceIn(0.01f, 1f))
                                         .padding(end = 4.dp, bottom = 4.dp)
                                 ) {
                                     // 3D Extruded Side & Bottom Prism Block
@@ -879,6 +1000,18 @@ fun TiltedRepeatingPaymentCard(
         .ifEmpty { "R" }
     val shape = RoundedCornerShape(26.dp)
 
+    val view = LocalView.current
+    val reducedMotion = LocalReducedMotion.current
+    val interactionSource = remember { MutableInteractionSource() }
+    val isPressed by interactionSource.collectIsPressedAsState()
+    val pressFraction by animateFloatAsState(
+        targetValue = if (isPressed) 1f else 0f,
+        animationSpec = Motion.pressSpring(reducedMotion),
+        label = "tiltedRepeatingPress_${item.id}"
+    )
+    val pressOffsetX = 5.dp * pressFraction
+    val pressOffsetY = 7.dp * pressFraction
+
     Box(
         modifier = modifier
             .fillMaxWidth()
@@ -899,8 +1032,14 @@ fun TiltedRepeatingPaymentCard(
         )
 
         Surface(
-            onClick = onToggleStateClick,
-            modifier = Modifier.fillMaxWidth(),
+            onClick = {
+                Motion.performLightTapHaptic(view)
+                onToggleStateClick()
+            },
+            interactionSource = interactionSource,
+            modifier = Modifier
+                .fillMaxWidth()
+                .offset(x = pressOffsetX, y = pressOffsetY),
             shape = shape,
             color = cardColor,
             contentColor = InkBlack,
@@ -1029,11 +1168,32 @@ fun EditorialDonutChart(
     onBrightCard: Boolean = true,
     isOnDarkSurface: Boolean = false
 ) {
+    val reducedMotion = LocalReducedMotion.current
     val colors = SnapSpendThemeTokens.colors
     val useDarkSurfaceStyling = colors.isDark && isOnDarkSurface && !onBrightCard
     val textColor = if (useDarkSurfaceStyling) PureWhite else InkBlack
     val subTextColor = if (useDarkSurfaceStyling) SecondaryGreyText else InkBlack.copy(alpha = 0.78f)
     val sliceGapDegrees = if (slices.size > 1) 4f else 0f
+
+    // Donut slices sweep clockwise from the top (-90°) one after another over CHART_MS (600ms)
+    val sweepRevealAnim = remember { Animatable(if (reducedMotion) 360f else 0f) }
+    LaunchedEffect(slices.isNotEmpty(), totalSpentPaise > 0L, reducedMotion) {
+        if (reducedMotion) {
+            sweepRevealAnim.snapTo(360f)
+        } else if (slices.isNotEmpty() && totalSpentPaise > 0L) {
+            if (sweepRevealAnim.value < 10f) {
+                sweepRevealAnim.snapTo(0f)
+                sweepRevealAnim.animateTo(
+                    targetValue = 360f,
+                    animationSpec = Motion.chartTween(reducedMotion = false)
+                )
+            } else {
+                sweepRevealAnim.snapTo(360f)
+            }
+        }
+    }
+
+    val animatedCenterSpentText = rememberAnimatedPaise(targetPaise = totalSpentPaise)
 
     Row(
         modifier = modifier.fillMaxWidth(),
@@ -1055,6 +1215,7 @@ fun EditorialDonutChart(
                 )
                 val shadowTopLeft = Offset(topLeft.x + depthDx, topLeft.y + depthDy)
                 val arcSize = Size(diameter, diameter)
+                val maxSweepBudget = sweepRevealAnim.value.coerceIn(0f, 360f)
 
                 if (slices.isEmpty() || totalSpentPaise <= 0L) {
                     val dashedStroke = Stroke(
@@ -1082,57 +1243,66 @@ fun EditorialDonutChart(
                         style = dashedStroke
                     )
                 } else {
-                    // 1. 3D Extruded Lower Depth Ring
+                    // 1. 3D Extruded Lower Depth Ring (sweeps sequentially clockwise from -90°)
                     var shadowStartAngle = -90f
+                    var consumedShadowSweep = 0f
                     slices.forEach { slice ->
                         val rawSweep = (slice.amountPaise.toFloat() / totalSpentPaise.toFloat()) * 360f
-                        val sweep = (rawSweep - sliceGapDegrees).coerceAtLeast(2f)
-                        val baseSliceColor = parseEditorialColor(slice.colorHex)
-                        // Darken the slice color for its 3D side wall
-                        val extrudedShade = Color(
-                            red = (baseSliceColor.red * 0.45f).coerceIn(0f, 1f),
-                            green = (baseSliceColor.green * 0.45f).coerceIn(0f, 1f),
-                            blue = (baseSliceColor.blue * 0.45f).coerceIn(0f, 1f),
-                            alpha = 1f
-                        )
-                        drawArc(
-                            color = extrudedShade,
-                            startAngle = shadowStartAngle + sliceGapDegrees / 2f,
-                            sweepAngle = sweep,
-                            useCenter = false,
-                            topLeft = shadowTopLeft,
-                            size = arcSize,
-                            style = Stroke(width = strokeWidth, cap = StrokeCap.Butt)
-                        )
+                        val allowedRawSweep = (maxSweepBudget - consumedShadowSweep).coerceIn(0f, rawSweep)
+                        if (allowedRawSweep > 0.5f) {
+                            val sweep = (allowedRawSweep - sliceGapDegrees).coerceAtLeast(1.5f)
+                            val baseSliceColor = parseEditorialColor(slice.colorHex)
+                            val extrudedShade = Color(
+                                red = (baseSliceColor.red * 0.45f).coerceIn(0f, 1f),
+                                green = (baseSliceColor.green * 0.45f).coerceIn(0f, 1f),
+                                blue = (baseSliceColor.blue * 0.45f).coerceIn(0f, 1f),
+                                alpha = 1f
+                            )
+                            drawArc(
+                                color = extrudedShade,
+                                startAngle = shadowStartAngle + sliceGapDegrees / 2f,
+                                sweepAngle = sweep,
+                                useCenter = false,
+                                topLeft = shadowTopLeft,
+                                size = arcSize,
+                                style = Stroke(width = strokeWidth, cap = StrokeCap.Butt)
+                            )
+                        }
                         shadowStartAngle += rawSweep
+                        consumedShadowSweep += rawSweep
                     }
 
-                    // 2. Main Elevated Top 3D Donut Ring
+                    // 2. Main Elevated Top 3D Donut Ring (sweeps sequentially clockwise from -90°)
                     var startAngle = -90f
+                    var consumedTopSweep = 0f
                     slices.forEach { slice ->
                         val rawSweep = (slice.amountPaise.toFloat() / totalSpentPaise.toFloat()) * 360f
-                        val sweep = (rawSweep - sliceGapDegrees).coerceAtLeast(2f)
-                        val sliceColor = parseEditorialColor(slice.colorHex)
-                        drawArc(
-                            color = sliceColor,
-                            startAngle = startAngle + sliceGapDegrees / 2f,
-                            sweepAngle = sweep,
-                            useCenter = false,
-                            topLeft = topLeft,
-                            size = arcSize,
-                            style = Stroke(width = strokeWidth, cap = StrokeCap.Butt)
-                        )
-                        // Subtle 3D specular highlight on each slice
-                        drawArc(
-                            color = PureWhite.copy(alpha = 0.35f),
-                            startAngle = startAngle + sliceGapDegrees / 2f,
-                            sweepAngle = sweep,
-                            useCenter = false,
-                            topLeft = topLeft,
-                            size = arcSize,
-                            style = Stroke(width = 3.dp.toPx(), cap = StrokeCap.Butt)
-                        )
+                        val allowedRawSweep = (maxSweepBudget - consumedTopSweep).coerceIn(0f, rawSweep)
+                        if (allowedRawSweep > 0.5f) {
+                            val sweep = (allowedRawSweep - sliceGapDegrees).coerceAtLeast(1.5f)
+                            val sliceColor = parseEditorialColor(slice.colorHex)
+                            drawArc(
+                                color = sliceColor,
+                                startAngle = startAngle + sliceGapDegrees / 2f,
+                                sweepAngle = sweep,
+                                useCenter = false,
+                                topLeft = topLeft,
+                                size = arcSize,
+                                style = Stroke(width = strokeWidth, cap = StrokeCap.Butt)
+                            )
+                            // Subtle 3D specular highlight on each slice
+                            drawArc(
+                                color = PureWhite.copy(alpha = 0.35f),
+                                startAngle = startAngle + sliceGapDegrees / 2f,
+                                sweepAngle = sweep,
+                                useCenter = false,
+                                topLeft = topLeft,
+                                size = arcSize,
+                                style = Stroke(width = 3.dp.toPx(), cap = StrokeCap.Butt)
+                            )
+                        }
                         startAngle += rawSweep
+                        consumedTopSweep += rawSweep
                     }
                 }
             }
@@ -1147,7 +1317,7 @@ fun EditorialDonutChart(
                     color = subTextColor
                 )
                 Text(
-                    text = MoneyUtils.formatPaise(totalSpentPaise),
+                    text = animatedCenterSpentText,
                     style = MaterialTheme.typography.titleMedium.copy(
                         fontWeight = FontWeight.Black,
                         fontFeatureSettings = "tnum"
@@ -1320,6 +1490,7 @@ fun IncomeVsExpenseMonthlyCard(
 
                 Spacer(modifier = Modifier.height(18.dp))
 
+                val reducedMotion = LocalReducedMotion.current
                 Row(
                     modifier = Modifier
                         .fillMaxWidth()
@@ -1327,17 +1498,38 @@ fun IncomeVsExpenseMonthlyCard(
                     horizontalArrangement = Arrangement.SpaceEvenly,
                     verticalAlignment = Alignment.Bottom
                 ) {
-                    bars.forEach { item ->
-                        val inRatio = if (item.earnedPaise > 0L) {
+                    bars.forEachIndexed { idx, item ->
+                        val targetInRatio = if (item.earnedPaise > 0L) {
                             (item.earnedPaise.toFloat() / maxPaise.toFloat()).coerceIn(0.12f, 1f)
                         } else {
                             0.08f
                         }
-                        val outRatio = if (item.spentPaise > 0L) {
+                        val targetOutRatio = if (item.spentPaise > 0L) {
                             (item.spentPaise.toFloat() / maxPaise.toFloat()).coerceIn(0.12f, 1f)
                         } else {
                             0.08f
                         }
+
+                        var barStarted by remember { mutableStateOf(reducedMotion) }
+                        LaunchedEffect(idx, reducedMotion) {
+                            if (reducedMotion) {
+                                barStarted = true
+                            } else if (!barStarted) {
+                                delay((idx * Motion.STAGGER_BAR_MS).toLong())
+                                barStarted = true
+                            }
+                        }
+
+                        val inRatio by animateFloatAsState(
+                            targetValue = if (barStarted) targetInRatio else 0.01f,
+                            animationSpec = Motion.physicalSpring(reducedMotion),
+                            label = "inBarRatio_$idx"
+                        )
+                        val outRatio by animateFloatAsState(
+                            targetValue = if (barStarted) targetOutRatio else 0.01f,
+                            animationSpec = Motion.physicalSpring(reducedMotion),
+                            label = "outBarRatio_$idx"
+                        )
 
                         Column(
                             horizontalAlignment = Alignment.CenterHorizontally,
@@ -1353,7 +1545,7 @@ fun IncomeVsExpenseMonthlyCard(
                                 Box(
                                     modifier = Modifier
                                         .width(16.dp)
-                                        .fillMaxHeight(inRatio)
+                                        .fillMaxHeight(inRatio.coerceIn(0.01f, 1f))
                                         .padding(end = 2.dp, bottom = 2.dp)
                                 ) {
                                     Box(
@@ -1375,7 +1567,7 @@ fun IncomeVsExpenseMonthlyCard(
                                 Box(
                                     modifier = Modifier
                                         .width(16.dp)
-                                        .fillMaxHeight(outRatio)
+                                        .fillMaxHeight(outRatio.coerceIn(0.01f, 1f))
                                         .padding(end = 2.dp, bottom = 2.dp)
                                 ) {
                                     Box(

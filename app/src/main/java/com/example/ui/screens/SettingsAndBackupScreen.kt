@@ -51,6 +51,7 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.vector.ImageVector
+import androidx.compose.ui.platform.LocalView
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.Dp
@@ -76,6 +77,8 @@ import com.example.ui.theme.EditorialAqua
 import com.example.ui.theme.EditorialCoral
 import com.example.ui.theme.EditorialMint
 import com.example.ui.theme.InkBlack
+import com.example.ui.theme.MarkScreenEntrancePlayedEffect
+import com.example.ui.theme.Motion
 import com.example.ui.theme.PaleLavenderTint
 import com.example.ui.theme.PaleMintHero
 import com.example.ui.theme.PeriwinkleIndigo
@@ -83,7 +86,9 @@ import com.example.ui.theme.PureWhite
 import com.example.ui.theme.SnapSpendThemeTokens
 import com.example.ui.theme.SunnyYellow
 import com.example.ui.theme.ThemeMode
+import com.example.ui.theme.dialogScaleFadeEntrance
 import com.example.ui.theme.parseEditorialColor
+import com.example.ui.theme.staggeredScreenEntrance
 import java.text.SimpleDateFormat
 import java.util.Date
 import java.util.Locale
@@ -125,6 +130,8 @@ fun SettingsAndBackupScreen(
         "Never backed up yet"
     }
 
+    MarkScreenEntrancePlayedEffect(screenKey = "settings")
+
     LazyColumn(
         modifier = modifier
             .fillMaxSize()
@@ -144,7 +151,8 @@ fun SettingsAndBackupScreen(
                 leadingIcon = Icons.Default.Layers,
                 leadingIconBg = PureWhite,
                 leadingIconTint = InkBlack,
-                titleColor = tokens.primaryText
+                titleColor = tokens.primaryText,
+                modifier = Modifier.staggeredScreenEntrance(screenKey = "settings", index = 0)
             )
         }
 
@@ -153,6 +161,7 @@ fun SettingsAndBackupScreen(
             Editorial3DLayerBox(
                 modifier = Modifier
                     .fillMaxWidth()
+                    .staggeredScreenEntrance(screenKey = "settings", index = 1)
                     .testTag("theme_selector_card"),
                 shape = RoundedCornerShape(28.dp),
                 extrusionColor = InkBlack,
@@ -201,15 +210,25 @@ fun SettingsAndBackupScreen(
 
         // 3. Google Drive Hidden Folder Backup Card (Coral #FF6F59 with StatusDotPill "● Connected" / "● Not connected")
         item(key = "settings_drive_backup_card") {
-            Surface(
+            val driveShape = RoundedCornerShape(28.dp)
+            Editorial3DLayerBox(
                 modifier = Modifier
                     .fillMaxWidth()
+                    .staggeredScreenEntrance(screenKey = "settings", index = 2)
                     .testTag("drive_backup_card"),
-                shape = RoundedCornerShape(28.dp),
-                color = EditorialCoral,
-                contentColor = BrightCardBlack,
-                border = BorderStroke(1.8.dp, BrightCardBlack)
+                shape = driveShape,
+                extrusionColor = InkBlack,
+                extrusionBorderColor = InkBlack,
+                depthX = 4.dp,
+                depthY = 6.dp
             ) {
+                Surface(
+                    modifier = Modifier.fillMaxWidth(),
+                    shape = driveShape,
+                    color = EditorialCoral,
+                    contentColor = BrightCardBlack,
+                    border = BorderStroke(1.8.dp, BrightCardBlack)
+                ) {
                 Column(modifier = Modifier.padding(22.dp)) {
                     Row(
                         modifier = Modifier.fillMaxWidth(),
@@ -343,52 +362,65 @@ fun SettingsAndBackupScreen(
                         }
                     }
                 }
+                }
             }
         }
 
         // 4. Manual Export & Import Card (Aqua #8FE3F0 with Black Text)
         item(key = "settings_export_card") {
-            Surface(
-                modifier = Modifier.fillMaxWidth(),
-                shape = RoundedCornerShape(28.dp),
-                color = EditorialAqua,
-                contentColor = BrightCardBlack,
-                border = BorderStroke(1.8.dp, BrightCardBlack)
+            val exportShape = RoundedCornerShape(28.dp)
+            Editorial3DLayerBox(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .staggeredScreenEntrance(screenKey = "settings", index = 3),
+                shape = exportShape,
+                extrusionColor = InkBlack,
+                extrusionBorderColor = InkBlack,
+                depthX = 4.dp,
+                depthY = 6.dp
             ) {
-                Column(modifier = Modifier.padding(22.dp)) {
-                    Text(
-                        text = "EXPORT & IMPORT FILES",
-                        style = CondensedCardTitleStyle.copy(fontSize = 26.sp),
-                        color = BrightCardBlack
-                    )
-                    Text(
-                        text = "Save a local JSON backup or Excel CSV spreadsheet anytime",
-                        style = MaterialTheme.typography.bodySmall.copy(fontWeight = FontWeight.SemiBold),
-                        color = BrightCardBlack.copy(alpha = 0.82f)
-                    )
-                    Spacer(modifier = Modifier.height(14.dp))
-                    Column(
-                        modifier = Modifier.fillMaxWidth(),
-                        verticalArrangement = Arrangement.spacedBy(10.dp)
-                    ) {
-                        FullWidthSettingsActionPillButton(
-                            label = "Export backup (.json)",
-                            leadingIcon = Icons.Default.Download,
-                            onClick = onExportJsonClick,
-                            testTag = "export_json_button"
+                Surface(
+                    modifier = Modifier.fillMaxWidth(),
+                    shape = exportShape,
+                    color = EditorialAqua,
+                    contentColor = BrightCardBlack,
+                    border = BorderStroke(1.8.dp, BrightCardBlack)
+                ) {
+                    Column(modifier = Modifier.padding(22.dp)) {
+                        Text(
+                            text = "EXPORT & IMPORT FILES",
+                            style = CondensedCardTitleStyle.copy(fontSize = 26.sp),
+                            color = BrightCardBlack
                         )
-                        FullWidthSettingsActionPillButton(
-                            label = "Export spreadsheet (.csv)",
-                            leadingIcon = Icons.Default.Download,
-                            onClick = onExportCsvClick,
-                            testTag = "export_csv_button"
+                        Text(
+                            text = "Save a local JSON backup or Excel CSV spreadsheet anytime",
+                            style = MaterialTheme.typography.bodySmall.copy(fontWeight = FontWeight.SemiBold),
+                            color = BrightCardBlack.copy(alpha = 0.82f)
                         )
-                        FullWidthSettingsActionPillButton(
-                            label = "Import from file",
-                            leadingIcon = Icons.Default.UploadFile,
-                            onClick = { showImportModeDialog = true },
-                            testTag = "import_json_button"
-                        )
+                        Spacer(modifier = Modifier.height(14.dp))
+                        Column(
+                            modifier = Modifier.fillMaxWidth(),
+                            verticalArrangement = Arrangement.spacedBy(10.dp)
+                        ) {
+                            FullWidthSettingsActionPillButton(
+                                label = "Export backup (.json)",
+                                leadingIcon = Icons.Default.Download,
+                                onClick = onExportJsonClick,
+                                testTag = "export_json_button"
+                            )
+                            FullWidthSettingsActionPillButton(
+                                label = "Export spreadsheet (.csv)",
+                                leadingIcon = Icons.Default.Download,
+                                onClick = onExportCsvClick,
+                                testTag = "export_csv_button"
+                            )
+                            FullWidthSettingsActionPillButton(
+                                label = "Import from file",
+                                leadingIcon = Icons.Default.UploadFile,
+                                onClick = { showImportModeDialog = true },
+                                testTag = "import_json_button"
+                            )
+                        }
                     }
                 }
             }
@@ -396,13 +428,24 @@ fun SettingsAndBackupScreen(
 
         // 5. Manage Categories (Sunny Yellow #FFD23F with Black Text)
         item(key = "settings_categories_card") {
-            Surface(
-                modifier = Modifier.fillMaxWidth(),
-                shape = RoundedCornerShape(28.dp),
-                color = SunnyYellow,
-                contentColor = BrightCardBlack,
-                border = BorderStroke(1.8.dp, BrightCardBlack)
+            val catShape = RoundedCornerShape(28.dp)
+            Editorial3DLayerBox(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .staggeredScreenEntrance(screenKey = "settings", index = 4),
+                shape = catShape,
+                extrusionColor = InkBlack,
+                extrusionBorderColor = InkBlack,
+                depthX = 4.dp,
+                depthY = 6.dp
             ) {
+                Surface(
+                    modifier = Modifier.fillMaxWidth(),
+                    shape = catShape,
+                    color = SunnyYellow,
+                    contentColor = BrightCardBlack,
+                    border = BorderStroke(1.8.dp, BrightCardBlack)
+                ) {
                 Column(modifier = Modifier.padding(22.dp)) {
                     Row(
                         modifier = Modifier.fillMaxWidth(),
@@ -508,69 +551,82 @@ fun SettingsAndBackupScreen(
                         }
                     }
                 }
+                }
             }
         }
 
         // 6. Learned Merchant Memory Card (Pale Mint #A8D5C0 with Black Text)
         item(key = "settings_memories_card") {
-            Surface(
-                modifier = Modifier.fillMaxWidth(),
-                shape = RoundedCornerShape(28.dp),
-                color = PaleMintHero,
-                contentColor = BrightCardBlack,
-                border = BorderStroke(1.8.dp, BrightCardBlack)
+            val memShape = RoundedCornerShape(28.dp)
+            Editorial3DLayerBox(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .staggeredScreenEntrance(screenKey = "settings", index = 5),
+                shape = memShape,
+                extrusionColor = InkBlack,
+                extrusionBorderColor = InkBlack,
+                depthX = 4.dp,
+                depthY = 6.dp
             ) {
-                Column(modifier = Modifier.padding(22.dp)) {
-                    Text(
-                        text = "LEARNED MERCHANTS (${uiState.merchantMemories.size})",
-                        style = CondensedCardTitleStyle.copy(fontSize = 26.sp),
-                        color = BrightCardBlack
-                    )
-                    Text(
-                        text = "Corrections you make on review or edit are remembered automatically",
-                        style = MaterialTheme.typography.bodySmall.copy(fontWeight = FontWeight.SemiBold),
-                        color = BrightCardBlack.copy(alpha = 0.8f)
-                    )
-                    Spacer(modifier = Modifier.height(12.dp))
-
-                    if (uiState.merchantMemories.isEmpty()) {
+                Surface(
+                    modifier = Modifier.fillMaxWidth(),
+                    shape = memShape,
+                    color = PaleMintHero,
+                    contentColor = BrightCardBlack,
+                    border = BorderStroke(1.8.dp, BrightCardBlack)
+                ) {
+                    Column(modifier = Modifier.padding(22.dp)) {
                         Text(
-                            text = "No learned rules yet. Change any merchant's category once and SnapSpend will remember it next time.",
-                            style = MaterialTheme.typography.bodyMedium.copy(fontWeight = FontWeight.Bold),
+                            text = "LEARNED MERCHANTS (${uiState.merchantMemories.size})",
+                            style = CondensedCardTitleStyle.copy(fontSize = 26.sp),
                             color = BrightCardBlack
                         )
-                    } else {
-                        Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                            uiState.merchantMemories.forEach { mem ->
-                                Surface(
-                                    modifier = Modifier.fillMaxWidth(),
-                                    shape = RoundedCornerShape(18.dp),
-                                    color = PureWhite,
-                                    border = BorderStroke(1.5.dp, BrightCardBlack)
-                                ) {
-                                    Row(
-                                        modifier = Modifier.padding(horizontal = 14.dp, vertical = 10.dp),
-                                        verticalAlignment = Alignment.CenterVertically,
-                                        horizontalArrangement = Arrangement.SpaceBetween
+                        Text(
+                            text = "Corrections you make on review or edit are remembered automatically",
+                            style = MaterialTheme.typography.bodySmall.copy(fontWeight = FontWeight.SemiBold),
+                            color = BrightCardBlack.copy(alpha = 0.8f)
+                        )
+                        Spacer(modifier = Modifier.height(12.dp))
+
+                        if (uiState.merchantMemories.isEmpty()) {
+                            Text(
+                                text = "No learned rules yet. Change any merchant's category once and SnapSpend will remember it next time.",
+                                style = MaterialTheme.typography.bodyMedium.copy(fontWeight = FontWeight.Bold),
+                                color = BrightCardBlack
+                            )
+                        } else {
+                            Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                                uiState.merchantMemories.forEach { mem ->
+                                    Surface(
+                                        modifier = Modifier.fillMaxWidth(),
+                                        shape = RoundedCornerShape(18.dp),
+                                        color = PureWhite,
+                                        border = BorderStroke(1.5.dp, BrightCardBlack)
                                     ) {
-                                        Column(modifier = Modifier.weight(1f)) {
-                                            Text(
-                                                text = mem.displayMerchant.uppercase(),
-                                                style = CondensedCardTitleStyle.copy(fontSize = 18.sp),
-                                                color = BrightCardBlack
-                                            )
-                                            Text(
-                                                text = "Always categorized as → ${mem.categoryName}",
-                                                style = MaterialTheme.typography.labelLarge.copy(fontWeight = FontWeight.Bold),
-                                                color = BrightCardBlack
-                                            )
-                                        }
-                                        IconButton(onClick = { onDeleteMerchantMemory(mem.normalizedMerchant) }) {
-                                            Icon(
-                                                imageVector = Icons.Default.Delete,
-                                                contentDescription = "Forget rule",
-                                                tint = BrightCardBlack
-                                            )
+                                        Row(
+                                            modifier = Modifier.padding(horizontal = 14.dp, vertical = 10.dp),
+                                            verticalAlignment = Alignment.CenterVertically,
+                                            horizontalArrangement = Arrangement.SpaceBetween
+                                        ) {
+                                            Column(modifier = Modifier.weight(1f)) {
+                                                Text(
+                                                    text = mem.displayMerchant.uppercase(),
+                                                    style = CondensedCardTitleStyle.copy(fontSize = 18.sp),
+                                                    color = BrightCardBlack
+                                                )
+                                                Text(
+                                                    text = "Always categorized as → ${mem.categoryName}",
+                                                    style = MaterialTheme.typography.labelLarge.copy(fontWeight = FontWeight.Bold),
+                                                    color = BrightCardBlack
+                                                )
+                                            }
+                                            IconButton(onClick = { onDeleteMerchantMemory(mem.normalizedMerchant) }) {
+                                                Icon(
+                                                    imageVector = Icons.Default.Delete,
+                                                    contentDescription = "Forget rule",
+                                                    tint = BrightCardBlack
+                                                )
+                                            }
                                         }
                                     }
                                 }
@@ -586,6 +642,7 @@ fun SettingsAndBackupScreen(
     if (showImportModeDialog) {
         AlertDialog(
             onDismissRequest = { showImportModeDialog = false },
+            modifier = Modifier.dialogScaleFadeEntrance(),
             containerColor = tokens.cardSurface,
             titleContentColor = tokens.primaryText,
             textContentColor = tokens.primaryText,
@@ -636,6 +693,7 @@ fun SettingsAndBackupScreen(
         val colorOptions = listOf("#FFD23F", "#FF6F59", "#8FE3F0", "#9FE3C0", "#5B5CF6")
         AlertDialog(
             onDismissRequest = { showCategoryDialog = false },
+            modifier = Modifier.dialogScaleFadeEntrance(),
             containerColor = tokens.cardSurface,
             titleContentColor = tokens.primaryText,
             textContentColor = tokens.primaryText,
@@ -735,6 +793,7 @@ private fun FullWidthSettingsActionPillButton(
     onClick: () -> Unit,
     testTag: String
 ) {
+    val view = LocalView.current
     Editorial3DLayerBox(
         modifier = Modifier
             .fillMaxWidth()
@@ -746,7 +805,10 @@ private fun FullWidthSettingsActionPillButton(
         enableInteractiveTilt = false
     ) {
         Surface(
-            onClick = onClick,
+            onClick = {
+                Motion.performLightTapHaptic(view)
+                onClick()
+            },
             modifier = Modifier.fillMaxWidth(),
             shape = CircleShape,
             color = PureWhite,

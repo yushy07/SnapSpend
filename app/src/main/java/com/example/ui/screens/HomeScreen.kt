@@ -93,10 +93,15 @@ import com.example.ui.theme.EditorialLavender
 import com.example.ui.theme.EditorialMint
 import com.example.ui.theme.EditorialPink
 import com.example.ui.theme.InkBlack
+import com.example.ui.theme.LocalReducedMotion
+import com.example.ui.theme.MarkScreenEntrancePlayedEffect
+import com.example.ui.theme.Motion
 import com.example.ui.theme.PureWhite
 import com.example.ui.theme.SecondaryGreyText
 import com.example.ui.theme.SnapSpendThemeTokens
 import com.example.ui.theme.SunnyYellow
+import com.example.ui.theme.rememberAnimatedPaise
+import com.example.ui.theme.staggeredScreenEntrance
 import com.example.util.MoneyUtils
 import java.util.Calendar
 import kotlin.math.roundToInt
@@ -181,6 +186,11 @@ fun HomeScreen(
     val secondaryInsightBody = uiState.localMathInsights.getOrNull(1)
         ?: "Total spent is ${MoneyUtils.formatPaise(uiState.thisMonthSpentPaise)} across ${uiState.allTransactions.count { it.type == TransactionType.EXPENSE }} expenses this month."
 
+    MarkScreenEntrancePlayedEffect(screenKey = "home")
+
+    val animatedSpentText = rememberAnimatedPaise(targetPaise = uiState.thisMonthSpentPaise)
+    val animatedEarnedText = rememberAnimatedPaise(targetPaise = uiState.thisMonthEarnedPaise)
+
     LazyColumn(
         modifier = modifier
             .fillMaxSize()
@@ -198,6 +208,7 @@ fun HomeScreen(
             Editorial3DLayerBox(
                 modifier = Modifier
                     .fillMaxWidth()
+                    .staggeredScreenEntrance("home", 0)
                     .testTag("home_top_search_pill"),
                 shape = CircleShape,
                 extrusionColor = if (SnapSpendThemeTokens.colors.isDark) SunnyYellow else InkBlack,
@@ -304,7 +315,10 @@ fun HomeScreen(
 
         // 2. HOME / INSIGHT CARDS (100% locally calculated with simple math, dark 3D #1C1C1E card)
         item(key = "home_live_insights_section") {
-            Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
+            Column(
+                modifier = Modifier.staggeredScreenEntrance("home", 1),
+                verticalArrangement = Arrangement.spacedBy(10.dp)
+            ) {
                 TinySectionLabel(text = "LIVE INSIGHTS")
 
                 DarkLiveInsightCard(
@@ -330,7 +344,8 @@ fun HomeScreen(
                 onPeriodDropdownClick = {
                     areaPeriodToggle = if (areaPeriodToggle == "This Week") "This Month" else "This Week"
                 },
-                onSetBudgetClick = onSetBudgetClick
+                onSetBudgetClick = onSetBudgetClick,
+                modifier = Modifier.staggeredScreenEntrance("home", 2)
             )
         }
 
@@ -344,6 +359,7 @@ fun HomeScreen(
                 onClick = onSeeChartsClick,
                 cardColor = EditorialAqua,
                 showViewDetailsFooter = true,
+                modifier = Modifier.staggeredScreenEntrance("home", 3),
                 testTag = "home_secondary_insight_card"
             )
         }
@@ -351,7 +367,9 @@ fun HomeScreen(
         // 5. Balance & Cashflow 3D Bento Summary (Sunny Yellow 3D Touch-Tilt Balance + 3D Coral Spent + 3D Mint Earned)
         item(key = "home_bento_grid") {
             Column(
-                modifier = Modifier.fillMaxWidth(),
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .staggeredScreenEntrance("home", 4),
                 verticalArrangement = Arrangement.spacedBy(12.dp)
             ) {
                 TinySectionLabel(text = "MONTHLY SNAPSHOT")
@@ -370,7 +388,7 @@ fun HomeScreen(
                 ) {
                     BentoStatTile(
                         labelCaps = "TOTAL SPENT",
-                        bigValueText = MoneyUtils.formatPaise(uiState.thisMonthSpentPaise),
+                        bigValueText = animatedSpentText,
                         shortLineText = "${uiState.allTransactions.count { it.amountPaise > 0 }} payments tracked",
                         cardColor = EditorialCoral,
                         cornerIcon = Icons.AutoMirrored.Outlined.TrendingDown,
@@ -381,7 +399,7 @@ fun HomeScreen(
 
                     BentoStatTile(
                         labelCaps = "TOTAL EARNED",
-                        bigValueText = MoneyUtils.formatPaise(uiState.thisMonthEarnedPaise),
+                        bigValueText = animatedEarnedText,
                         shortLineText = "Income & cashbacks",
                         cardColor = EditorialMint,
                         cornerIcon = Icons.AutoMirrored.Outlined.TrendingUp,
@@ -400,6 +418,7 @@ fun HomeScreen(
                 leadingIcon = Icons.Default.Add,
                 onClick = onManualAddClick,
                 containerColor = EditorialLavender,
+                modifier = Modifier.staggeredScreenEntrance("home", 5),
                 testTag = "home_manual_add_button"
             )
         }
@@ -407,7 +426,9 @@ fun HomeScreen(
         // 7. Recent Activity List (3D Stacked Deck)
         item(key = "home_recent_header") {
             Row(
-                modifier = Modifier.fillMaxWidth(),
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .staggeredScreenEntrance("home", 6),
                 horizontalArrangement = Arrangement.SpaceBetween,
                 verticalAlignment = Alignment.CenterVertically
             ) {
@@ -421,20 +442,22 @@ fun HomeScreen(
         }
 
         item(key = "home_recent_transactions") {
-            if (uiState.last5Transactions.isEmpty()) {
-                EmptyRecentTransactionsCard(
-                    onPickImagesClick = onPickImagesClick,
-                    onPickPdfClick = onPickPdfClick,
-                    onAiQuickNoteClick = onAiQuickNoteClick,
-                    onManualAddClick = onManualAddClick
-                )
-            } else {
-                StackedPastelTransactionDeck(
-                    transactions = uiState.last5Transactions,
-                    onTransactionClick = onTransactionClick,
-                    categories = uiState.categories,
-                    highlightTopCardInLime = false
-                )
+            Box(modifier = Modifier.staggeredScreenEntrance("home", 7)) {
+                if (uiState.last5Transactions.isEmpty()) {
+                    EmptyRecentTransactionsCard(
+                        onPickImagesClick = onPickImagesClick,
+                        onPickPdfClick = onPickPdfClick,
+                        onAiQuickNoteClick = onAiQuickNoteClick,
+                        onManualAddClick = onManualAddClick
+                    )
+                } else {
+                    StackedPastelTransactionDeck(
+                        transactions = uiState.last5Transactions,
+                        onTransactionClick = onTransactionClick,
+                        categories = uiState.categories,
+                        highlightTopCardInLime = false
+                    )
+                }
             }
         }
     }
@@ -500,38 +523,39 @@ private fun TouchTiltHeroBalanceCard(
 ) {
     val density = LocalDensity.current.density
     val isDark = SnapSpendThemeTokens.colors.isDark
+    val reducedMotion = LocalReducedMotion.current
 
     var tiltX by remember { mutableFloatStateOf(0f) }
     var tiltY by remember { mutableFloatStateOf(0f) }
+    var isHeroPressed by remember { mutableStateOf(false) }
     var shineCenter by remember { mutableStateOf(Offset.Unspecified) }
 
     val animatedTiltX by animateFloatAsState(
-        targetValue = tiltX,
-        animationSpec = spring(
-            dampingRatio = Spring.DampingRatioMediumBouncy,
-            stiffness = Spring.StiffnessLow
-        ),
+        targetValue = if (reducedMotion) 0f else tiltX,
+        animationSpec = Motion.physicalSpring(reducedMotion),
         label = "heroTiltX"
     )
     val animatedTiltY by animateFloatAsState(
-        targetValue = tiltY,
-        animationSpec = spring(
-            dampingRatio = Spring.DampingRatioMediumBouncy,
-            stiffness = Spring.StiffnessLow
-        ),
+        targetValue = if (reducedMotion) 0f else tiltY,
+        animationSpec = Motion.physicalSpring(reducedMotion),
         label = "heroTiltY"
+    )
+    val pressFraction by animateFloatAsState(
+        targetValue = if (isHeroPressed) 1f else 0f,
+        animationSpec = Motion.pressSpring(reducedMotion),
+        label = "heroPressFraction"
     )
 
     val animatedProgress by animateFloatAsState(
         targetValue = usedFraction.coerceIn(0f, 1f),
-        animationSpec = spring(
-            dampingRatio = Spring.DampingRatioNoBouncy,
-            stiffness = Spring.StiffnessLow
-        ),
+        animationSpec = Motion.chartTween(reducedMotion),
         label = "budgetProgress"
     )
 
-    val formattedBalance = (if (balancePaise < 0L) "-" else "") + MoneyUtils.formatPaise(balancePaise)
+    val formattedBalance = rememberAnimatedPaise(
+        targetPaise = balancePaise,
+        includeSignForNegative = true
+    )
 
     Box(
         modifier = modifier
@@ -554,6 +578,12 @@ private fun TouchTiltHeroBalanceCard(
         Surface(
             modifier = Modifier
                 .fillMaxWidth()
+                .offset {
+                    IntOffset(
+                        x = (shadowOffsetX * pressFraction).dp.roundToPx(),
+                        y = (shadowOffsetY * pressFraction).dp.roundToPx()
+                    )
+                }
                 .graphicsLayer {
                     rotationX = animatedTiltX
                     rotationY = animatedTiltY
@@ -562,6 +592,7 @@ private fun TouchTiltHeroBalanceCard(
                 .pointerInput(Unit) {
                     awaitEachGesture {
                         val down = awaitFirstDown(requireUnconsumed = false)
+                        isHeroPressed = true
                         val w = size.width.toFloat().coerceAtLeast(1f)
                         val h = size.height.toFloat().coerceAtLeast(1f)
 
@@ -582,6 +613,7 @@ private fun TouchTiltHeroBalanceCard(
                             }
                         } while (event.changes.any { it.pressed })
 
+                        isHeroPressed = false
                         tiltX = 0f
                         tiltY = 0f
                         shineCenter = Offset.Unspecified

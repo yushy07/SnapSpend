@@ -71,9 +71,12 @@ import com.example.ui.theme.PaleMintTint
 import com.example.ui.theme.PalePinkTint
 import com.example.ui.theme.PeriwinkleIndigo
 import com.example.ui.theme.PureWhite
+import com.example.ui.theme.MarkScreenEntrancePlayedEffect
 import com.example.ui.theme.SecondaryGreyText
 import com.example.ui.theme.SnapSpendThemeTokens
 import com.example.ui.theme.SunnyYellow
+import com.example.ui.theme.rememberAnimatedPaise
+import com.example.ui.theme.staggeredScreenEntrance
 import com.example.util.MoneyUtils
 import kotlin.math.abs
 
@@ -133,6 +136,9 @@ fun ChartsAndInsightsScreen(
     val totalMonthlyBudgetLimitPaise = uiState.budgets.sumOf { it.monthlyLimitPaise }
     val dailyTargetAveragePaise = if (totalMonthlyBudgetLimitPaise > 0L) totalMonthlyBudgetLimitPaise / 30L else 0L
 
+    val screenEntranceKey = "charts_${activeSubTab.name}"
+    MarkScreenEntrancePlayedEffect(screenKey = screenEntranceKey)
+
     LazyColumn(
         modifier = modifier
             .fillMaxSize()
@@ -147,7 +153,10 @@ fun ChartsAndInsightsScreen(
     ) {
         // 1. Bold Uppercase Condensed Screen Title ("REVENUE") + White Pill Dropdowns + Sub-Tab Toggle
         item(key = "charts_header") {
-            Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
+            Column(
+                modifier = Modifier.staggeredScreenEntrance(screenKey = screenEntranceKey, index = 0),
+                verticalArrangement = Arrangement.spacedBy(12.dp)
+            ) {
                 UppercaseScreenHeader(
                     title = "SPENDING",
                     leadingIcon = Icons.AutoMirrored.Filled.TrendingUp,
@@ -199,14 +208,16 @@ fun ChartsAndInsightsScreen(
             ChartsSubTab.OVERVIEW -> {
                 // 1. MONTH / WEEK / YEAR COMPARISON (3D Rounded Coral Card #FF6F59 with 2 Lighter Coral #FF8A76 boxes + 3D Mint selected bar)
                 item(key = "overview_bar_chart") {
-                    CoralComparisonBarChartCard(
-                        totalSpentPaise = rangeSpentPaise,
-                        avgPerDayPaise = avgPerDayPaise,
-                        totalDeltaLabel = totalDeltaPillText,
-                        avgDeltaLabel = avgDeltaPillText,
-                        comparisonSubtitle = "vs. previous\nperiod",
-                        bars = uiState.editorialPillBars
-                    )
+                    Box(modifier = Modifier.staggeredScreenEntrance(screenKey = screenEntranceKey, index = 1)) {
+                        CoralComparisonBarChartCard(
+                            totalSpentPaise = rangeSpentPaise,
+                            avgPerDayPaise = avgPerDayPaise,
+                            totalDeltaLabel = totalDeltaPillText,
+                            avgDeltaLabel = avgDeltaPillText,
+                            comparisonSubtitle = "vs. previous\nperiod",
+                            bars = uiState.editorialPillBars
+                        )
+                    }
                 }
 
                 // 2. HOME / INSIGHT CARDS (100% locally calculated with simple math, dark 3D #1C1C1E cards)
@@ -214,6 +225,7 @@ fun ChartsAndInsightsScreen(
                     Column(
                         modifier = Modifier
                             .fillMaxWidth()
+                            .staggeredScreenEntrance(screenKey = screenEntranceKey, index = 2)
                             .testTag("local_math_insights_card"),
                         verticalArrangement = Arrangement.spacedBy(12.dp)
                     ) {
@@ -250,7 +262,10 @@ fun ChartsAndInsightsScreen(
                         it.state != RepeatingState.DISMISSED
                     }
                     if (activeRepeating.isNotEmpty()) {
-                        Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
+                        Column(
+                            modifier = Modifier.staggeredScreenEntrance(screenKey = screenEntranceKey, index = 3),
+                            verticalArrangement = Arrangement.spacedBy(10.dp)
+                        ) {
                             UppercaseScreenHeader(
                                 title = "REPEATING PAYMENTS",
                                 leadingIcon = Icons.Default.Autorenew,
@@ -280,7 +295,9 @@ fun ChartsAndInsightsScreen(
                 item(key = "overview_donut") {
                     val donutShape = RoundedCornerShape(28.dp)
                     Editorial3DLayerBox(
-                        modifier = Modifier.fillMaxWidth(),
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .staggeredScreenEntrance(screenKey = screenEntranceKey, index = 4),
                         shape = donutShape,
                         extrusionColor = InkBlack,
                         extrusionBorderColor = InkBlack,
@@ -325,7 +342,9 @@ fun ChartsAndInsightsScreen(
                 item(key = "overview_top_5_merchants") {
                     val topPlacesShape = RoundedCornerShape(28.dp)
                     Editorial3DLayerBox(
-                        modifier = Modifier.fillMaxWidth(),
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .staggeredScreenEntrance(screenKey = screenEntranceKey, index = 5),
                         shape = topPlacesShape,
                         extrusionColor = InkBlack,
                         extrusionBorderColor = InkBlack,
@@ -446,20 +465,24 @@ fun ChartsAndInsightsScreen(
             ChartsSubTab.TRENDS -> {
                 // 1. SPENDING OVER TIME (3D Indigo #5B5CF6 Area Chart Card)
                 item(key = "trends_line_chart") {
-                    EditorialLineTrendCard(
-                        points = uiState.lineChartPoints,
-                        granularity = uiState.lineGranularity,
-                        onGranularityChange = onLineGranularityChange,
-                        monthlyBudgetAveragePaise = dailyTargetAveragePaise,
-                        onSetBudgetClick = onSetBudgetClick
-                    )
+                    Box(modifier = Modifier.staggeredScreenEntrance(screenKey = screenEntranceKey, index = 1)) {
+                        EditorialLineTrendCard(
+                            points = uiState.lineChartPoints,
+                            granularity = uiState.lineGranularity,
+                            onGranularityChange = onLineGranularityChange,
+                            monthlyBudgetAveragePaise = dailyTargetAveragePaise,
+                            onSetBudgetClick = onSetBudgetClick
+                        )
+                    }
                 }
 
                 // 2. 3D Income vs Expense Bar Chart Card
                 item(key = "trends_income_vs_expense") {
-                    IncomeVsExpenseMonthlyCard(
-                        bars = uiState.monthlyIncomeExpenseBars
-                    )
+                    Box(modifier = Modifier.staggeredScreenEntrance(screenKey = screenEntranceKey, index = 2)) {
+                        IncomeVsExpenseMonthlyCard(
+                            bars = uiState.monthlyIncomeExpenseBars
+                        )
+                    }
                 }
 
                 // 3. 3D This Month vs Last Month Comparison Card (Sunny Yellow #FFD23F with black text)
@@ -473,9 +496,17 @@ fun ChartsAndInsightsScreen(
                         else -> "SAME AS LAST MONTH"
                     }
                     val momShape = RoundedCornerShape(28.dp)
+                    val animatedCurrentMonthText = rememberAnimatedPaise(
+                        targetPaise = mom?.currentSpentPaise ?: uiState.thisMonthSpentPaise
+                    )
+                    val animatedLastMonthText = rememberAnimatedPaise(
+                        targetPaise = mom?.previousSpentPaise ?: 0L
+                    )
 
                     Editorial3DLayerBox(
-                        modifier = Modifier.fillMaxWidth(),
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .staggeredScreenEntrance(screenKey = screenEntranceKey, index = 3),
                         shape = momShape,
                         extrusionColor = if (isDark) EditorialCoral else InkBlack,
                         extrusionBorderColor = InkBlack,
@@ -527,7 +558,7 @@ fun ChartsAndInsightsScreen(
                                                     color = InkBlack.copy(alpha = 0.7f)
                                                 )
                                                 ResponsiveTabularNumberText(
-                                                    text = MoneyUtils.formatPaise(mom?.currentSpentPaise ?: uiState.thisMonthSpentPaise),
+                                                    text = animatedCurrentMonthText,
                                                     maxFontSize = 26.sp,
                                                     minFontSize = 18.sp,
                                                     color = InkBlack
@@ -555,7 +586,7 @@ fun ChartsAndInsightsScreen(
                                                     color = InkBlack.copy(alpha = 0.7f)
                                                 )
                                                 ResponsiveTabularNumberText(
-                                                    text = MoneyUtils.formatPaise(mom?.previousSpentPaise ?: 0L),
+                                                    text = animatedLastMonthText,
                                                     maxFontSize = 26.sp,
                                                     minFontSize = 18.sp,
                                                     color = InkBlack
@@ -574,7 +605,9 @@ fun ChartsAndInsightsScreen(
                 // 1. Embedded 3D Indigo Stacked Folder-Tab Categories card
                 item(key = "budgets_folder_categories") {
                     Editorial3DLayerBox(
-                        modifier = Modifier.fillMaxWidth(),
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .staggeredScreenEntrance(screenKey = screenEntranceKey, index = 1),
                         shape = RoundedCornerShape(30.dp),
                         extrusionColor = if (isDark) SunnyYellow.copy(alpha = 0.75f) else InkBlack,
                         extrusionBorderColor = InkBlack,
@@ -599,7 +632,10 @@ fun ChartsAndInsightsScreen(
 
                 // 2. Repeating Payments (3D Slightly Tilted Cards in Coral, Yellow, Aqua)
                 item(key = "budgets_repeating_payments") {
-                    Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
+                    Column(
+                        modifier = Modifier.staggeredScreenEntrance(screenKey = screenEntranceKey, index = 2),
+                        verticalArrangement = Arrangement.spacedBy(10.dp)
+                    ) {
                         UppercaseScreenHeader(
                             title = "REPEATING PAYMENTS",
                             leadingIcon = Icons.Default.Storefront,

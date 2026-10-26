@@ -1,9 +1,16 @@
 package com.example.ui.screens
 
+import androidx.compose.animation.animateColorAsState
 import androidx.compose.animation.animateContentSize
 import androidx.compose.animation.core.Animatable
 import androidx.compose.animation.core.FastOutSlowInEasing
+import androidx.compose.animation.core.RepeatMode
 import androidx.compose.animation.core.Spring
+import androidx.compose.animation.core.animateDpAsState
+import androidx.compose.animation.core.animateFloat
+import androidx.compose.animation.core.animateFloatAsState
+import androidx.compose.animation.core.infiniteRepeatable
+import androidx.compose.animation.core.rememberInfiniteTransition
 import androidx.compose.animation.core.spring
 import androidx.compose.animation.core.tween
 import androidx.compose.foundation.BorderStroke
@@ -12,8 +19,11 @@ import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.gestures.detectHorizontalDragGestures
+import androidx.compose.foundation.interaction.MutableInteractionSource
+import androidx.compose.foundation.interaction.collectIsPressedAsState
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
@@ -77,6 +87,7 @@ import androidx.compose.ui.input.pointer.util.VelocityTracker
 import androidx.compose.ui.layout.onSizeChanged
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.platform.LocalHapticFeedback
+import androidx.compose.ui.platform.LocalView
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.semantics.contentDescription
@@ -106,10 +117,16 @@ import com.example.ui.theme.EditorialCoral
 import com.example.ui.theme.EditorialMint
 import com.example.ui.theme.EditorialPink
 import com.example.ui.theme.InkBlack
+import com.example.ui.theme.LocalReducedMotion
+import com.example.ui.theme.MarkScreenEntrancePlayedEffect
+import com.example.ui.theme.Motion
 import com.example.ui.theme.PeriwinkleIndigo
 import com.example.ui.theme.PureWhite
 import com.example.ui.theme.SnapSpendThemeTokens
 import com.example.ui.theme.SunnyYellow
+import com.example.ui.theme.dialogScaleFadeEntrance
+import com.example.ui.theme.rememberAnimatedPaise
+import com.example.ui.theme.staggeredScreenEntrance
 import com.example.util.MoneyUtils
 import java.text.SimpleDateFormat
 import java.util.Calendar
@@ -359,6 +376,11 @@ fun CategoriesFolderScreen(
     // Shared trigger so tapping top chips or the front arrow button can animate through the deck
     var programmaticStepRequest by remember { mutableIntStateOf(0) }
     var programmaticTargetIndex by remember { mutableIntStateOf(-1) }
+    val view = LocalView.current
+    val reducedMotion = LocalReducedMotion.current
+    val density = LocalDensity.current
+
+    MarkScreenEntrancePlayedEffect(screenKey = "categories")
 
     Box(
         modifier = modifier
@@ -379,7 +401,9 @@ fun CategoriesFolderScreen(
             // 1. Header: Round White Icon Circle + Bold Uppercase "CATEGORIES" + Expenses | Earnings Toggle
             item(key = "categories_header") {
                 Row(
-                    modifier = Modifier.fillMaxWidth(),
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .staggeredScreenEntrance(screenKey = "categories", index = 0),
                     horizontalArrangement = Arrangement.SpaceBetween,
                     verticalAlignment = Alignment.CenterVertically
                 ) {
@@ -409,7 +433,9 @@ fun CategoriesFolderScreen(
                 item(key = "categories_quick_strip") {
                     LazyRow(
                         state = chipListState,
-                        modifier = Modifier.fillMaxWidth(),
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .staggeredScreenEntrance(screenKey = "categories", index = 1),
                         horizontalArrangement = Arrangement.spacedBy(8.dp),
                         contentPadding = PaddingValues(end = 8.dp)
                     ) {
@@ -418,6 +444,16 @@ fun CategoriesFolderScreen(
                             key = { _, cat -> "${cat.categoryType.name}_${cat.categoryName}" }
                         ) { idx, cat ->
                             val isSelected = idx == safeSelectedIndex
+                            val chipInteraction = remember { MutableInteractionSource() }
+                            val isChipPressed by chipInteraction.collectIsPressedAsState()
+                            val chipPressFraction by animateFloatAsState(
+                                targetValue = if (isChipPressed) 1f else 0f,
+                                animationSpec = Motion.pressSpring(reducedMotion),
+                                label = "cat_chip_press"
+                            )
+                            val dxPx = with(density) { 2.dp.toPx() }
+                            val dyPx = with(density) { 3.dp.toPx() }
+
                             Box(modifier = Modifier.padding(end = 2.dp, bottom = 3.dp)) {
                                 Box(
                                     modifier = Modifier
@@ -428,11 +464,13 @@ fun CategoriesFolderScreen(
                                 )
                                 Surface(
                                     onClick = {
+                                        Motion.performLightTapHaptic(view)
                                         if (idx != safeSelectedIndex) {
                                             programmaticTargetIndex = idx
                                             programmaticStepRequest++
                                         }
                                     },
+                                    interactionSource = chipInteraction,
                                     shape = CircleShape,
                                     color = if (isSelected) SunnyYellow else PureWhite.copy(alpha = 0.22f),
                                     contentColor = if (isSelected) InkBlack else PureWhite,
@@ -441,6 +479,10 @@ fun CategoriesFolderScreen(
                                         color = if (isSelected) InkBlack else PureWhite.copy(alpha = 0.45f)
                                     ),
                                     modifier = Modifier
+                                        .graphicsLayer {
+                                            translationX = dxPx * chipPressFraction
+                                            translationY = dyPx * chipPressFraction
+                                        }
                                         .semantics {
                                             contentDescription = "${cat.categoryName} category chip"
                                         }
@@ -473,26 +515,28 @@ fun CategoriesFolderScreen(
 
             // 3. Swipeable 3D Stacked Category Deck + Counter Pill underneath
             item(key = "stacked_folder_tabs") {
-                SwipeableCategoryFolderDeck(
-                    categories = activeDeckCategories,
-                    selectedIndex = safeSelectedIndex,
-                    programmaticStepRequest = programmaticStepRequest,
-                    programmaticTargetIndex = programmaticTargetIndex,
-                    hasAtLeastTwoMonthsOfData = hasAtLeastTwoMonthsOfData,
-                    onSelectIndex = { newIndex ->
-                        selectedIndex = newIndex
-                    },
-                    onEditBudgetClick = { catName, currentLimitPaise ->
-                        budgetCategoryTarget = catName
-                        budgetInputText = if (currentLimitPaise != null && currentLimitPaise > 0L) {
-                            (currentLimitPaise / 100L).toString()
-                        } else {
-                            ""
-                        }
-                        showBudgetDialog = true
-                    },
-                    onTransactionClick = onTransactionClick
-                )
+                Box(modifier = Modifier.staggeredScreenEntrance(screenKey = "categories", index = 2)) {
+                    SwipeableCategoryFolderDeck(
+                        categories = activeDeckCategories,
+                        selectedIndex = safeSelectedIndex,
+                        programmaticStepRequest = programmaticStepRequest,
+                        programmaticTargetIndex = programmaticTargetIndex,
+                        hasAtLeastTwoMonthsOfData = hasAtLeastTwoMonthsOfData,
+                        onSelectIndex = { newIndex ->
+                            selectedIndex = newIndex
+                        },
+                        onEditBudgetClick = { catName, currentLimitPaise ->
+                            budgetCategoryTarget = catName
+                            budgetInputText = if (currentLimitPaise != null && currentLimitPaise > 0L) {
+                                (currentLimitPaise / 100L).toString()
+                            } else {
+                                ""
+                            }
+                            showBudgetDialog = true
+                        },
+                        onTransactionClick = onTransactionClick
+                    )
+                }
             }
         }
     }
@@ -501,6 +545,7 @@ fun CategoriesFolderScreen(
         val tokens = SnapSpendThemeTokens.colors
         AlertDialog(
             onDismissRequest = { showBudgetDialog = false },
+            modifier = Modifier.dialogScaleFadeEntrance(),
             containerColor = tokens.cardSurface,
             titleContentColor = tokens.primaryText,
             textContentColor = tokens.primaryText,
@@ -570,6 +615,10 @@ private fun ExpensesEarningsDeckToggle(
     selectedType: CategoryType,
     onSelectType: (CategoryType) -> Unit
 ) {
+    val view = LocalView.current
+    val reducedMotion = LocalReducedMotion.current
+    val isExpense = selectedType == CategoryType.EXPENSE
+
     Box(modifier = Modifier.padding(end = 2.dp, bottom = 3.dp)) {
         Box(
             modifier = Modifier
@@ -584,24 +633,52 @@ private fun ExpensesEarningsDeckToggle(
             border = BorderStroke(1.6.dp, InkBlack),
             modifier = Modifier.testTag("categories_type_toggle")
         ) {
-            Row(
-                modifier = Modifier.padding(3.dp),
-                verticalAlignment = Alignment.CenterVertically,
-                horizontalArrangement = Arrangement.spacedBy(2.dp)
+            BoxWithConstraints(
+                modifier = Modifier
+                    .width(152.dp)
+                    .height(30.dp)
+                    .padding(3.dp)
             ) {
-                val isExpense = selectedType == CategoryType.EXPENSE
-                DeckTypeSegmentPill(
-                    label = "Expenses",
-                    selected = isExpense,
-                    onClick = { onSelectType(CategoryType.EXPENSE) },
-                    testTag = "categories_toggle_expenses"
+                val segmentWidth = maxWidth / 2f
+                val indicatorOffsetX by animateDpAsState(
+                    targetValue = if (isExpense) 0.dp else segmentWidth,
+                    animationSpec = Motion.physicalSpring(reducedMotion),
+                    label = "expenses_earnings_pill_slide"
                 )
-                DeckTypeSegmentPill(
-                    label = "Earnings",
-                    selected = !isExpense,
-                    onClick = { onSelectType(CategoryType.EARNING) },
-                    testTag = "categories_toggle_earnings"
+                Box(
+                    modifier = Modifier
+                        .offset(x = indicatorOffsetX)
+                        .width(segmentWidth)
+                        .fillMaxHeight()
+                        .clip(CircleShape)
+                        .background(SunnyYellow)
+                        .border(1.2.dp, InkBlack, CircleShape)
                 )
+                Row(
+                    modifier = Modifier.fillMaxSize(),
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    DeckTypeSegmentPill(
+                        label = "Expenses",
+                        selected = isExpense,
+                        onClick = {
+                            Motion.performLightTapHaptic(view)
+                            onSelectType(CategoryType.EXPENSE)
+                        },
+                        testTag = "categories_toggle_expenses",
+                        modifier = Modifier.weight(1f)
+                    )
+                    DeckTypeSegmentPill(
+                        label = "Earnings",
+                        selected = !isExpense,
+                        onClick = {
+                            Motion.performLightTapHaptic(view)
+                            onSelectType(CategoryType.EARNING)
+                        },
+                        testTag = "categories_toggle_earnings",
+                        modifier = Modifier.weight(1f)
+                    )
+                }
             }
         }
     }
@@ -612,25 +689,31 @@ private fun DeckTypeSegmentPill(
     label: String,
     selected: Boolean,
     onClick: () -> Unit,
-    testTag: String
+    testTag: String,
+    modifier: Modifier = Modifier
 ) {
-    Surface(
-        onClick = onClick,
-        shape = CircleShape,
-        color = if (selected) SunnyYellow else Color.Transparent,
-        border = if (selected) BorderStroke(1.2.dp, InkBlack) else null,
-        modifier = Modifier
+    val reducedMotion = LocalReducedMotion.current
+    val textColor by animateColorAsState(
+        targetValue = if (selected) InkBlack else InkBlack.copy(alpha = 0.65f),
+        animationSpec = Motion.quickTween(reducedMotion),
+        label = "deck_type_text_color"
+    )
+    Box(
+        contentAlignment = Alignment.Center,
+        modifier = modifier
+            .fillMaxHeight()
+            .clip(CircleShape)
+            .clickable(role = Role.Tab, onClick = onClick)
             .semantics { contentDescription = "$label categories toggle" }
             .testTag(testTag)
     ) {
         Text(
             text = label,
-            modifier = Modifier.padding(horizontal = 10.dp, vertical = 5.dp),
             style = MaterialTheme.typography.labelSmall.copy(
                 fontWeight = FontWeight.ExtraBold,
                 fontSize = 11.sp
             ),
-            color = InkBlack
+            color = textColor
         )
     }
 }
@@ -1237,6 +1320,22 @@ private fun FrontSwipeableCategoryCard(
                 Spacer(modifier = Modifier.height(12.dp))
 
                 // Compact Editorial 3D Storefront Illustration so "Category total" box stays fully visible above + ADD
+                val reducedMotion = LocalReducedMotion.current
+                val bobOffsetDp = if (activeSpentPaise == 0L && !reducedMotion) {
+                    val infiniteTransition = rememberInfiniteTransition(label = "empty_category_bob")
+                    val bob by infiniteTransition.animateFloat(
+                        initialValue = -Motion.BOB_AMPLITUDE.value,
+                        targetValue = Motion.BOB_AMPLITUDE.value,
+                        animationSpec = infiniteRepeatable(
+                            animation = tween(durationMillis = Motion.BOB_CYCLE_MS, easing = FastOutSlowInEasing),
+                            repeatMode = RepeatMode.Reverse
+                        ),
+                        label = "empty_category_bob_float"
+                    )
+                    bob.dp
+                } else {
+                    0.dp
+                }
                 CategoryStorefrontIllustration(
                     categoryName = activeCategoryName,
                     accentDotColor = item.categoryDotColor,
@@ -1244,11 +1343,15 @@ private fun FrontSwipeableCategoryCard(
                     modifier = Modifier
                         .fillMaxWidth()
                         .height(104.dp)
+                        .graphicsLayer {
+                            translationY = bobOffsetDp.toPx()
+                        }
                 )
 
                 Spacer(modifier = Modifier.height(12.dp))
 
                 // White "CATEGORY TOTAL" Box with Progress Bar & "Set budget" Button
+                val animatedSpentText = rememberAnimatedPaise(targetPaise = activeSpentPaise)
                 Editorial3DLayerBox(
                     modifier = Modifier.fillMaxWidth(),
                     shape = RoundedCornerShape(20.dp),
@@ -1280,7 +1383,7 @@ private fun FrontSwipeableCategoryCard(
                                         color = InkBlack.copy(alpha = 0.78f)
                                     )
                                     ResponsiveTabularNumberText(
-                                        text = MoneyUtils.formatPaise(activeSpentPaise),
+                                        text = animatedSpentText,
                                         maxFontSize = 28.sp,
                                         minFontSize = 20.sp,
                                         color = InkBlack
@@ -1288,8 +1391,12 @@ private fun FrontSwipeableCategoryCard(
                                 }
 
                                 if (isExpenseMode) {
+                                    val view = LocalView.current
                                     Surface(
-                                        onClick = { onEditBudgetClick(activeCategoryName, activeBudgetLimitPaise) },
+                                        onClick = {
+                                            Motion.performLightTapHaptic(view)
+                                            onEditBudgetClick(activeCategoryName, activeBudgetLimitPaise)
+                                        },
                                         shape = CircleShape,
                                         color = InkBlack,
                                         contentColor = PureWhite,
@@ -1318,13 +1425,20 @@ private fun FrontSwipeableCategoryCard(
 
                             Spacer(modifier = Modifier.height(10.dp))
 
-                            // Progress bar
+                            // Progress bar (animated smoothly from 0f / previous fraction to target fraction)
                             val progressFraction = when {
                                 activeBudgetLimitPaise != null && activeBudgetLimitPaise > 0L ->
                                     (activeSpentPaise.toFloat() / activeBudgetLimitPaise.toFloat()).coerceIn(0f, 1f)
                                 activeSpentPaise > 0L -> (activePercentage / 100f).coerceIn(0.08f, 1f)
                                 else -> 0f
                             }
+                            var barEntered by remember { mutableStateOf(false) }
+                            LaunchedEffect(Unit) { barEntered = true }
+                            val animatedProgressFraction by animateFloatAsState(
+                                targetValue = if (barEntered || reducedMotion) progressFraction else 0f,
+                                animationSpec = Motion.chartTween(reducedMotion),
+                                label = "category_budget_progress"
+                            )
                             val barColor = when {
                                 activeBudgetUsage != null && activeBudgetUsage >= 80 -> EditorialCoral
                                 else -> EditorialMint
@@ -1338,10 +1452,10 @@ private fun FrontSwipeableCategoryCard(
                                     .background(InkBlack.copy(alpha = 0.12f))
                                     .border(1.4.dp, InkBlack, CircleShape)
                             ) {
-                                if (progressFraction > 0f) {
+                                if (animatedProgressFraction > 0.005f) {
                                     Box(
                                         modifier = Modifier
-                                            .fillMaxWidth(progressFraction.coerceAtLeast(0.06f))
+                                            .fillMaxWidth(animatedProgressFraction.coerceAtLeast(0.06f))
                                             .fillMaxHeight()
                                             .clip(CircleShape)
                                             .background(barColor)
@@ -1470,13 +1584,34 @@ private fun DeckFrontArrowButton(
 ) {
     val bg = if (isDarkCard) PureWhite else InkBlack
     val fg = if (isDarkCard) InkBlack else PureWhite
+    val view = LocalView.current
+    val reducedMotion = LocalReducedMotion.current
+    val interactionSource = remember { MutableInteractionSource() }
+    val isPressed by interactionSource.collectIsPressedAsState()
+    val scale by animateFloatAsState(
+        targetValue = if (isPressed) 0.90f else 1f,
+        animationSpec = Motion.pressSpring(reducedMotion),
+        label = "deck_arrow_press_scale"
+    )
     Box(
         modifier = Modifier
             .size(44.dp)
+            .graphicsLayer {
+                scaleX = scale
+                scaleY = scale
+            }
             .clip(CircleShape)
             .background(bg)
             .border(1.5.dp, if (isDarkCard) InkBlack else PureWhite.copy(alpha = 0.25f), CircleShape)
-            .clickable(role = Role.Button, onClick = onClick)
+            .clickable(
+                interactionSource = interactionSource,
+                indication = null,
+                role = Role.Button,
+                onClick = {
+                    Motion.performLightTapHaptic(view)
+                    onClick()
+                }
+            )
             .semantics { contentDescription = "Next category folder" }
             .testTag(testTag),
         contentAlignment = Alignment.Center

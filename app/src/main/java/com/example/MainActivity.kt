@@ -17,15 +17,23 @@ import androidx.activity.result.IntentSenderRequest
 import androidx.activity.result.PickVisualMediaRequest
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.activity.viewModels
+import androidx.compose.animation.AnimatedContent
 import androidx.compose.animation.AnimatedVisibility
+import androidx.compose.animation.animateColorAsState
 import androidx.compose.animation.animateContentSize
+import androidx.compose.animation.core.animateDpAsState
+import androidx.compose.animation.core.animateFloatAsState
 import androidx.compose.animation.expandHorizontally
 import androidx.compose.animation.fadeIn
 import androidx.compose.animation.fadeOut
 import androidx.compose.animation.shrinkHorizontally
+import androidx.compose.animation.slideInHorizontally
+import androidx.compose.animation.togetherWith
 import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.interaction.MutableInteractionSource
+import androidx.compose.foundation.interaction.collectIsPressedAsState
 import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
@@ -38,6 +46,7 @@ import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.navigationBarsPadding
+import androidx.compose.foundation.layout.offset
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.safeDrawing
 import androidx.compose.foundation.layout.size
@@ -123,6 +132,11 @@ import com.example.ui.theme.EditorialAqua
 import com.example.ui.theme.EditorialBg
 import com.example.ui.theme.EditorialCoral
 import com.example.ui.theme.InkBlack
+import androidx.compose.ui.layout.onGloballyPositioned
+import androidx.compose.ui.layout.positionInParent
+import com.example.ui.theme.LocalReducedMotion
+import com.example.ui.theme.Motion
+import com.example.ui.theme.NewTransactionHighlightTracker
 import com.example.ui.theme.PeriwinkleIndigo
 import com.example.ui.theme.PureWhite
 import com.example.ui.theme.SecondaryGreyText
@@ -131,9 +145,11 @@ import com.example.ui.theme.SnapSpendThemeTokens
 import com.example.ui.theme.SunnyYellow
 import com.example.ui.theme.ThemeMode
 import com.example.ui.theme.TrueBlackBg
+import com.example.ui.theme.dialogScaleFadeEntrance
 import com.example.util.MoneyUtils
 import com.example.util.configureAppCheck
 import java.io.File
+import kotlin.math.roundToInt
 import kotlinx.coroutines.delay
 
 enum class SnapSpendTab(val label: String, val icon: ImageVector, val testTag: String) {
@@ -394,6 +410,11 @@ fun SnapSpendRootScreen(
         isFabExpanded = true
     }
 
+    // Track newly inserted transaction IDs so new items slide in from top and flash a warm highlight
+    LaunchedEffect(uiState.allTransactions) {
+        NewTransactionHighlightTracker.syncTransactions(uiState.allTransactions.map { it.id })
+    }
+
     val fabScrollConnection = remember {
         object : NestedScrollConnection {
             override fun onPreScroll(available: Offset, source: NestedScrollSource): Offset {
@@ -478,152 +499,175 @@ fun SnapSpendRootScreen(
                     val topContentPadding = innerPadding.calculateTopPadding() + 8.dp
                     val bottomContentPadding = maxOf(120.dp, innerPadding.calculateBottomPadding() + 72.dp)
 
+                    val reducedMotion = LocalReducedMotion.current
+                    val slideOffsetPx = with(density) { Motion.TAB_SLIDE_DISTANCE.roundToPx() }
+
                     Box(
                         modifier = Modifier
                             .fillMaxSize()
                             .nestedScroll(fabScrollConnection)
                     ) {
-                    when (currentTab) {
-                        SnapSpendTab.HOME -> {
-                            HomeScreen(
-                                uiState = uiState,
-                                onPickImagesClick = {
-                                    photoPickerLauncher.launch(
-                                        PickVisualMediaRequest(ActivityResultContracts.PickVisualMedia.ImageOnly)
+                        AnimatedContent(
+                            targetState = currentTab,
+                            transitionSpec = {
+                                if (reducedMotion) {
+                                    fadeIn(Motion.quickTween(true)) togetherWith fadeOut(Motion.quickTween(true))
+                                } else {
+                                    val direction = if (targetState.ordinal >= initialState.ordinal) 1 else -1
+                                    (slideInHorizontally(
+                                        animationSpec = Motion.normalIntOffsetTween(false),
+                                        initialOffsetX = { direction * slideOffsetPx }
+                                    ) + fadeIn(
+                                        animationSpec = Motion.normalTween(false)
+                                    )) togetherWith fadeOut(
+                                        animationSpec = Motion.fastExitTween(false)
                                     )
-                                },
-                                onPickPdfClick = {
-                                    pdfPickerLauncher.launch(arrayOf("application/pdf"))
-                                },
-                                onAiQuickNoteClick = {
-                                    showAiNoteDialog = true
-                                },
-                                onTrySampleScanClick = {
-                                    viewModel.scanSampleUpiScreenshotWithGemini(samplePresetCounter++)
-                                },
-                                onManualAddClick = {
-                                    editingTransaction = null
-                                    showTransactionEditor = true
-                                },
-                                onSeeAllTransactionsClick = {
-                                    currentTab = SnapSpendTab.TRANSACTIONS
-                                },
-                                onSeeChartsClick = {
-                                    currentTab = SnapSpendTab.CHARTS
-                                },
-                                onTransactionClick = { tx ->
-                                    editingTransaction = tx
-                                    showTransactionEditor = true
-                                },
-                                onRetryQueuedScansClick = viewModel::retryQueuedScans,
-                                onSetBudgetClick = {
-                                    showBudgetSetupDialog = true
-                                },
-                                topContentPadding = topContentPadding,
-                                bottomContentPadding = bottomContentPadding
-                            )
-                        }
-
-                        SnapSpendTab.TRANSACTIONS -> {
-                            TransactionsScreen(
-                                uiState = uiState,
-                                onSearchQueryChange = viewModel::updateSearchQuery,
-                                onDateRangeChange = viewModel::updateDateRangeFilter,
-                                onCategoryFilterChange = viewModel::updateCategoryFilter,
-                                onTypeFilterChange = viewModel::updateTypeFilter,
-                                onPaymentAppFilterChange = viewModel::updatePaymentAppFilter,
-                                onClearFilters = viewModel::clearAllFilters,
-                                onTransactionClick = { tx ->
-                                    editingTransaction = tx
-                                    showTransactionEditor = true
-                                },
-                                topContentPadding = topContentPadding,
-                                bottomContentPadding = bottomContentPadding
-                            )
-                        }
-
-                        SnapSpendTab.CATEGORIES -> {
-                            CategoriesFolderScreen(
-                                uiState = uiState,
-                                onSaveBudget = { category, limitPaise ->
-                                    if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
-                                        notificationPermissionLauncher.launch(Manifest.permission.POST_NOTIFICATIONS)
-                                    }
-                                    viewModel.saveBudget(category, limitPaise)
-                                },
-                                onTransactionClick = { tx ->
-                                    editingTransaction = tx
-                                    showTransactionEditor = true
-                                },
-                                topContentPadding = topContentPadding,
-                                bottomContentPadding = bottomContentPadding
-                            )
-                        }
-
-                        SnapSpendTab.CHARTS -> {
-                            ChartsAndInsightsScreen(
-                                uiState = uiState,
-                                onChartDateRangeChange = viewModel::updateChartDateRange,
-                                onLineGranularityChange = viewModel::updateLineGranularity,
-                                onSaveBudget = { category, limitPaise ->
-                                    if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
-                                        notificationPermissionLauncher.launch(Manifest.permission.POST_NOTIFICATIONS)
-                                    }
-                                    viewModel.saveBudget(category, limitPaise)
-                                },
-                                onRepeatingStateChange = viewModel::updateRepeatingState,
-                                onSetBudgetClick = {
-                                    showBudgetSetupDialog = true
-                                },
-                                topContentPadding = topContentPadding,
-                                bottomContentPadding = bottomContentPadding
-                            )
-                        }
-
-                        SnapSpendTab.SETTINGS -> {
-                            SettingsAndBackupScreen(
-                                uiState = uiState,
-                                backupState = backupState,
-                                isBackupBusy = isBackupBusy,
-                                themeMode = themeMode,
-                                onThemeModeChange = viewModel::setThemeMode,
-                                onConnectGoogleClick = { viewModel.connectGoogleAccount(activity) },
-                                onDisconnectGoogleClick = viewModel::disconnectGoogleAccount,
-                                onBackupNowClick = viewModel::triggerDriveBackupNow,
-                                onRestoreFromDriveClick = {
-                                    viewModel.checkForDriveBackupToRestore(silentIfNone = false)
-                                },
-                                onExportJsonClick = {
-                                    exportJsonLauncher.launch("snapspend_backup.json")
-                                },
-                                onExportCsvClick = {
-                                    exportCsvLauncher.launch("snapspend_transactions.csv")
-                                },
-                                onImportJsonClick = { replaceAll ->
-                                    importReplaceMode = replaceAll
-                                    importJsonLauncher.launch(arrayOf("application/json", "*/*"))
-                                },
-                                onSaveCategory = { id, oldName, newName, type, colorHex, isDefault ->
-                                    viewModel.saveCategory(
-                                        id = id,
-                                        oldName = oldName,
-                                        newName = newName,
-                                        type = type,
-                                        colorHex = colorHex,
-                                        iconName = "category",
-                                        isDefault = isDefault
+                                }
+                            },
+                            label = "tabScreenDirectionalSlide"
+                        ) { targetTab ->
+                            when (targetTab) {
+                                SnapSpendTab.HOME -> {
+                                    HomeScreen(
+                                        uiState = uiState,
+                                        onPickImagesClick = {
+                                            photoPickerLauncher.launch(
+                                                PickVisualMediaRequest(ActivityResultContracts.PickVisualMedia.ImageOnly)
+                                            )
+                                        },
+                                        onPickPdfClick = {
+                                            pdfPickerLauncher.launch(arrayOf("application/pdf"))
+                                        },
+                                        onAiQuickNoteClick = {
+                                            showAiNoteDialog = true
+                                        },
+                                        onTrySampleScanClick = {
+                                            viewModel.scanSampleUpiScreenshotWithGemini(samplePresetCounter++)
+                                        },
+                                        onManualAddClick = {
+                                            editingTransaction = null
+                                            showTransactionEditor = true
+                                        },
+                                        onSeeAllTransactionsClick = {
+                                            currentTab = SnapSpendTab.TRANSACTIONS
+                                        },
+                                        onSeeChartsClick = {
+                                            currentTab = SnapSpendTab.CHARTS
+                                        },
+                                        onTransactionClick = { tx ->
+                                            editingTransaction = tx
+                                            showTransactionEditor = true
+                                        },
+                                        onRetryQueuedScansClick = viewModel::retryQueuedScans,
+                                        onSetBudgetClick = {
+                                            showBudgetSetupDialog = true
+                                        },
+                                        topContentPadding = topContentPadding,
+                                        bottomContentPadding = bottomContentPadding
                                     )
-                                },
-                                onDeleteCategory = viewModel::deleteCustomCategory,
-                                onDeleteMerchantMemory = { normMerchant ->
-                                    viewModel.showToast("Removed learned rule for $normMerchant")
-                                },
-                                topContentPadding = topContentPadding,
-                                bottomContentPadding = bottomContentPadding
-                            )
+                                }
+
+                                SnapSpendTab.TRANSACTIONS -> {
+                                    TransactionsScreen(
+                                        uiState = uiState,
+                                        onSearchQueryChange = viewModel::updateSearchQuery,
+                                        onDateRangeChange = viewModel::updateDateRangeFilter,
+                                        onCategoryFilterChange = viewModel::updateCategoryFilter,
+                                        onTypeFilterChange = viewModel::updateTypeFilter,
+                                        onPaymentAppFilterChange = viewModel::updatePaymentAppFilter,
+                                        onClearFilters = viewModel::clearAllFilters,
+                                        onTransactionClick = { tx ->
+                                            editingTransaction = tx
+                                            showTransactionEditor = true
+                                        },
+                                        topContentPadding = topContentPadding,
+                                        bottomContentPadding = bottomContentPadding
+                                    )
+                                }
+
+                                SnapSpendTab.CATEGORIES -> {
+                                    CategoriesFolderScreen(
+                                        uiState = uiState,
+                                        onSaveBudget = { category, limitPaise ->
+                                            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+                                                notificationPermissionLauncher.launch(Manifest.permission.POST_NOTIFICATIONS)
+                                            }
+                                            viewModel.saveBudget(category, limitPaise)
+                                        },
+                                        onTransactionClick = { tx ->
+                                            editingTransaction = tx
+                                            showTransactionEditor = true
+                                        },
+                                        topContentPadding = topContentPadding,
+                                        bottomContentPadding = bottomContentPadding
+                                    )
+                                }
+
+                                SnapSpendTab.CHARTS -> {
+                                    ChartsAndInsightsScreen(
+                                        uiState = uiState,
+                                        onChartDateRangeChange = viewModel::updateChartDateRange,
+                                        onLineGranularityChange = viewModel::updateLineGranularity,
+                                        onSaveBudget = { category, limitPaise ->
+                                            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+                                                notificationPermissionLauncher.launch(Manifest.permission.POST_NOTIFICATIONS)
+                                            }
+                                            viewModel.saveBudget(category, limitPaise)
+                                        },
+                                        onRepeatingStateChange = viewModel::updateRepeatingState,
+                                        onSetBudgetClick = {
+                                            showBudgetSetupDialog = true
+                                        },
+                                        topContentPadding = topContentPadding,
+                                        bottomContentPadding = bottomContentPadding
+                                    )
+                                }
+
+                                SnapSpendTab.SETTINGS -> {
+                                    SettingsAndBackupScreen(
+                                        uiState = uiState,
+                                        backupState = backupState,
+                                        isBackupBusy = isBackupBusy,
+                                        themeMode = themeMode,
+                                        onThemeModeChange = viewModel::setThemeMode,
+                                        onConnectGoogleClick = { viewModel.connectGoogleAccount(activity) },
+                                        onDisconnectGoogleClick = viewModel::disconnectGoogleAccount,
+                                        onBackupNowClick = viewModel::triggerDriveBackupNow,
+                                        onRestoreFromDriveClick = {
+                                            viewModel.checkForDriveBackupToRestore(silentIfNone = false)
+                                        },
+                                        onExportJsonClick = {
+                                            exportJsonLauncher.launch("snapspend_backup.json")
+                                        },
+                                        onExportCsvClick = {
+                                            exportCsvLauncher.launch("snapspend_transactions.csv")
+                                        },
+                                        onImportJsonClick = { replaceAll ->
+                                            importReplaceMode = replaceAll
+                                            importJsonLauncher.launch(arrayOf("application/json", "*/*"))
+                                        },
+                                        onSaveCategory = { id, oldName, newName, type, colorHex, isDefault ->
+                                            viewModel.saveCategory(
+                                                id = id,
+                                                oldName = oldName,
+                                                newName = newName,
+                                                type = type,
+                                                colorHex = colorHex,
+                                                iconName = "category",
+                                                isDefault = isDefault
+                                            )
+                                        },
+                                        onDeleteCategory = viewModel::deleteCustomCategory,
+                                        onDeleteMerchantMemory = { normMerchant ->
+                                            viewModel.showToast("Removed learned rule for $normMerchant")
+                                        },
+                                        topContentPadding = topContentPadding,
+                                        bottomContentPadding = bottomContentPadding
+                                    )
+                                }
+                            }
                         }
                     }
-                }
             }
 
             // Thin scrim behind the status bar only: matches the current screen's background
@@ -775,6 +819,7 @@ fun SnapSpendRootScreen(
 
         AlertDialog(
             onDismissRequest = { showBudgetSetupDialog = false },
+            modifier = Modifier.dialogScaleFadeEntrance(),
             containerColor = tokens.cardSurface,
             titleContentColor = tokens.primaryText,
             textContentColor = tokens.primaryText,
@@ -858,6 +903,7 @@ fun SnapSpendRootScreen(
     restoreOffer?.let { metadata ->
         AlertDialog(
             onDismissRequest = viewModel::dismissRestoreOffer,
+            modifier = Modifier.dialogScaleFadeEntrance(),
             containerColor = tokens.cardSurface,
             titleContentColor = tokens.primaryText,
             textContentColor = tokens.primaryText,
@@ -909,6 +955,33 @@ private fun EditorialBottomNavBar(
     currentTab: SnapSpendTab,
     onTabSelected: (SnapSpendTab) -> Unit
 ) {
+    val view = LocalView.current
+    val density = LocalDensity.current
+    val reducedMotion = LocalReducedMotion.current
+    val tabs = SnapSpendTab.entries
+    val selectedIndex = tabs.indexOf(currentTab).coerceAtLeast(0)
+
+    // Measure each tab item's X offset & width inside the row so the Aqua pill slides smoothly to the selected tab
+    val tabOffsetsPx = remember { IntArray(tabs.size) }
+    val tabWidthsPx = remember { IntArray(tabs.size) }
+    var hasMeasuredTabs by remember { mutableStateOf(false) }
+
+    val targetPillOffsetDp = with(density) { tabOffsetsPx[selectedIndex].toDp() }
+    val targetPillWidthDp = with(density) { tabWidthsPx[selectedIndex].coerceAtLeast(1).toDp() }
+
+    val animatedPillOffsetX by animateDpAsState(
+        targetValue = targetPillOffsetDp,
+        animationSpec = Motion.physicalSpring(reducedMotion),
+        label = "bottomNavAquaPillOffsetX"
+    )
+    val animatedPillWidth by animateDpAsState(
+        targetValue = targetPillWidthDp,
+        animationSpec = Motion.physicalSpring(reducedMotion),
+        label = "bottomNavAquaPillWidth"
+    )
+
+    val pillShape = RoundedCornerShape(16.dp)
+
     Surface(
         modifier = Modifier
             .fillMaxWidth()
@@ -919,51 +992,125 @@ private fun EditorialBottomNavBar(
         border = BorderStroke(1.5.dp, DarkSubtleBorder),
         shadowElevation = 12.dp
     ) {
-        Row(
+        Box(
             modifier = Modifier
                 .fillMaxWidth()
-                .padding(horizontal = 10.dp, vertical = 8.dp),
-            horizontalArrangement = Arrangement.SpaceBetween,
-            verticalAlignment = Alignment.CenterVertically
+                .padding(horizontal = 10.dp, vertical = 8.dp)
         ) {
-            SnapSpendTab.entries.forEach { tab ->
-                val isSelected = currentTab == tab
-                val pillShape = RoundedCornerShape(16.dp)
+            // Sliding 3D Aqua (#8FE3F0) selected-tab pill behind the active tab
+            if (hasMeasuredTabs && tabWidthsPx[selectedIndex] > 0) {
                 Box(
                     modifier = Modifier
-                        .minimumInteractiveComponentSize()
-                        .height(46.dp)
-                        .animateContentSize()
-                        .clickable(role = Role.Tab) { onTabSelected(tab) }
-                        .testTag(tab.testTag),
+                        .offset(x = animatedPillOffsetX)
+                        .width(animatedPillWidth)
+                        .height(44.dp),
                     contentAlignment = Alignment.Center
                 ) {
-                    if (isSelected) {
-                        Editorial3DLayerBox(
-                            shape = pillShape,
-                            depthX = 2.dp,
-                            depthY = 3.dp,
-                            extrusionColor = Color(0xFF050507),
-                            enableInteractiveTilt = false
-                        ) {
+                    Editorial3DLayerBox(
+                        modifier = Modifier.fillMaxSize(),
+                        shape = pillShape,
+                        depthX = 2.dp,
+                        depthY = 3.dp,
+                        extrusionColor = Color(0xFF050507),
+                        enableInteractiveTilt = false
+                    ) {
+                        Box(
+                            modifier = Modifier
+                                .fillMaxSize()
+                                .clip(pillShape)
+                                .background(EditorialAqua)
+                        )
+                    }
+                }
+            }
+
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.SpaceBetween,
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                tabs.forEachIndexed { idx, tab ->
+                    val isSelected = currentTab == tab
+                    val tabInteractionSource = remember { MutableInteractionSource() }
+                    val isTabPressed by tabInteractionSource.collectIsPressedAsState()
+                    val tabPressFraction by animateFloatAsState(
+                        targetValue = if (isTabPressed) 1f else 0f,
+                        animationSpec = Motion.pressSpring(reducedMotion),
+                        label = "bottomNavTabPress_${tab.name}"
+                    )
+                    val iconTint by animateColorAsState(
+                        targetValue = if (isSelected) InkBlack else PureWhite,
+                        animationSpec = Motion.quickTween(reducedMotion),
+                        label = "bottomNavIconTint_${tab.name}"
+                    )
+
+                    Box(
+                        modifier = Modifier
+                            .minimumInteractiveComponentSize()
+                            .height(46.dp)
+                            .onGloballyPositioned { coords ->
+                                val posX = coords.positionInParent().x.roundToInt()
+                                val w = coords.size.width
+                                if (tabOffsetsPx[idx] != posX || tabWidthsPx[idx] != w) {
+                                    tabOffsetsPx[idx] = posX
+                                    tabWidthsPx[idx] = w
+                                    if (tabWidthsPx.any { it > 0 }) {
+                                        hasMeasuredTabs = true
+                                    }
+                                }
+                            }
+                            .offset(
+                                x = 2.dp * tabPressFraction,
+                                y = 2.5.dp * tabPressFraction
+                            )
+                            .clickable(
+                                interactionSource = tabInteractionSource,
+                                indication = null,
+                                role = Role.Tab
+                            ) {
+                                Motion.performLightTapHaptic(view)
+                                onTabSelected(tab)
+                            }
+                            .testTag(tab.testTag),
+                        contentAlignment = Alignment.Center
+                    ) {
+                        // Fallback Aqua pill on very first frame before onGloballyPositioned fires
+                        if (isSelected && !hasMeasuredTabs) {
                             Box(
                                 modifier = Modifier
-                                    .height(42.dp)
+                                    .matchParentSize()
                                     .clip(pillShape)
                                     .background(EditorialAqua)
-                                    .padding(horizontal = 12.dp),
-                                contentAlignment = Alignment.Center
+                            )
+                        }
+
+                        Row(
+                            modifier = Modifier
+                                .height(42.dp)
+                                .padding(horizontal = if (isSelected) 12.dp else 11.dp),
+                            verticalAlignment = Alignment.CenterVertically,
+                            horizontalArrangement = Arrangement.Center
+                        ) {
+                            Icon(
+                                imageVector = tab.icon,
+                                contentDescription = tab.label,
+                                tint = iconTint,
+                                modifier = Modifier.size(if (isSelected) 20.dp else 22.dp)
+                            )
+                            // Selected tab label grows out and shrinks away with a spring animation (never a sudden jump)
+                            AnimatedVisibility(
+                                visible = isSelected,
+                                enter = expandHorizontally(
+                                    animationSpec = Motion.physicalIntSizeSpring(reducedMotion),
+                                    expandFrom = Alignment.Start
+                                ) + fadeIn(animationSpec = Motion.quickTween(reducedMotion)),
+                                exit = shrinkHorizontally(
+                                    animationSpec = Motion.physicalIntSizeSpring(reducedMotion),
+                                    shrinkTowards = Alignment.Start
+                                ) + fadeOut(animationSpec = Motion.quickTween(reducedMotion))
                             ) {
-                                Row(
-                                    verticalAlignment = Alignment.CenterVertically,
-                                    horizontalArrangement = Arrangement.spacedBy(6.dp)
-                                ) {
-                                    Icon(
-                                        imageVector = tab.icon,
-                                        contentDescription = tab.label,
-                                        tint = InkBlack,
-                                        modifier = Modifier.size(20.dp)
-                                    )
+                                Row(verticalAlignment = Alignment.CenterVertically) {
+                                    Spacer(modifier = Modifier.width(6.dp))
                                     Text(
                                         text = tab.label,
                                         style = MaterialTheme.typography.labelMedium.copy(
@@ -975,18 +1122,6 @@ private fun EditorialBottomNavBar(
                                     )
                                 }
                             }
-                        }
-                    } else {
-                        Box(
-                            modifier = Modifier.size(44.dp),
-                            contentAlignment = Alignment.Center
-                        ) {
-                            Icon(
-                                imageVector = tab.icon,
-                                contentDescription = tab.label,
-                                tint = PureWhite,
-                                modifier = Modifier.size(22.dp)
-                            )
                         }
                     }
                 }
@@ -1006,19 +1141,27 @@ private fun QuickAddFloatingPillButton(
     expanded: Boolean,
     onClick: () -> Unit
 ) {
+    val view = LocalView.current
+    val reducedMotion = LocalReducedMotion.current
+    val interactionSource = remember { MutableInteractionSource() }
+    val isPressed by interactionSource.collectIsPressedAsState()
     val pillShape = CircleShape
     Editorial3DLayerBox(
         shape = pillShape,
         depthX = 3.5.dp,
         depthY = 5.dp,
         extrusionColor = if (isDark) Color(0xFF000000) else InkBlack,
-        enableInteractiveTilt = false
+        enableInteractiveTilt = false,
+        externalPressed = isPressed
     ) {
         Surface(
-            onClick = onClick,
+            onClick = {
+                Motion.performLightTapHaptic(view)
+                onClick()
+            },
+            interactionSource = interactionSource,
             modifier = Modifier
                 .height(52.dp)
-                .animateContentSize()
                 .testTag("fab_add_payment"),
             shape = pillShape,
             color = SunnyYellow,
@@ -1041,8 +1184,8 @@ private fun QuickAddFloatingPillButton(
                 )
                 AnimatedVisibility(
                     visible = expanded,
-                    enter = fadeIn() + expandHorizontally(),
-                    exit = fadeOut() + shrinkHorizontally()
+                    enter = fadeIn(Motion.quickTween(reducedMotion)) + expandHorizontally(Motion.physicalIntSizeSpring(reducedMotion)),
+                    exit = fadeOut(Motion.quickTween(reducedMotion)) + shrinkHorizontally(Motion.physicalIntSizeSpring(reducedMotion))
                 ) {
                     Row(verticalAlignment = Alignment.CenterVertically) {
                         Spacer(modifier = Modifier.width(6.dp))

@@ -1,5 +1,6 @@
 package com.example.ui.theme
 
+import androidx.compose.animation.animateColorAsState
 import androidx.compose.foundation.isSystemInDarkTheme
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.MaterialTheme
@@ -10,6 +11,7 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.runtime.Immutable
 import androidx.compose.runtime.ReadOnlyComposable
+import androidx.compose.runtime.getValue
 import androidx.compose.runtime.staticCompositionLocalOf
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.unit.dp
@@ -188,10 +190,45 @@ fun SnapSpendTheme(
         ThemeMode.DARK -> true
     }
 
-    val snapColors = if (useDark) DarkSnapSpendColors else LightSnapSpendColors
-    val m3Scheme = if (useDark) SnapSpendDarkColorScheme else SnapSpendLightColorScheme
+    val reducedMotion = rememberSystemReducedMotion()
+    val targetColors = if (useDark) DarkSnapSpendColors else LightSnapSpendColors
+    val colorSpec = Motion.normalTween<Color>(reducedMotion = reducedMotion)
 
-    CompositionLocalProvider(LocalSnapSpendColors provides snapColors) {
+    // 10. THEME TOGGLE: Colors cross-fade over 300ms across the whole app instead of snapping
+    val animAppBg by animateColorAsState(targetColors.appBackground, colorSpec, label = "themeAppBg")
+    val animCardSurface by animateColorAsState(targetColors.slateOrNeutralCard, colorSpec, label = "themeCardSurface")
+    val animDivider by animateColorAsState(targetColors.dividerColor, colorSpec, label = "themeDivider")
+    val animPrimaryText by animateColorAsState(targetColors.primaryText, colorSpec, label = "themePrimaryText")
+    val animSecondaryText by animateColorAsState(targetColors.secondaryText, colorSpec, label = "themeSecondaryText")
+    val animSectionTitle by animateColorAsState(targetColors.sectionTitleColor, colorSpec, label = "themeSectionTitle")
+    val animCardBorder by animateColorAsState(targetColors.cardBorder, colorSpec, label = "themeCardBorder")
+    val animSliceGap by animateColorAsState(targetColors.chartSliceGapColor, colorSpec, label = "themeSliceGap")
+
+    val snapColors = targetColors.copy(
+        appBackground = animAppBg,
+        slateOrNeutralCard = animCardSurface,
+        dividerColor = animDivider,
+        primaryText = animPrimaryText,
+        secondaryText = animSecondaryText,
+        sectionTitleColor = animSectionTitle,
+        cardBorder = animCardBorder,
+        chartSliceGapColor = animSliceGap
+    )
+
+    val baseScheme = if (useDark) SnapSpendDarkColorScheme else SnapSpendLightColorScheme
+    val m3Scheme = baseScheme.copy(
+        background = animAppBg,
+        onBackground = animPrimaryText,
+        surface = animCardSurface,
+        onSurface = animPrimaryText,
+        onSurfaceVariant = animSecondaryText,
+        outline = animCardBorder
+    )
+
+    CompositionLocalProvider(
+        LocalSnapSpendColors provides snapColors,
+        LocalReducedMotion provides reducedMotion
+    ) {
         MaterialTheme(
             colorScheme = m3Scheme,
             typography = Typography,

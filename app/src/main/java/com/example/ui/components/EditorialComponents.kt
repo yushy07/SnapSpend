@@ -1,9 +1,23 @@
 package com.example.ui.components
 
+import androidx.compose.animation.AnimatedContent
 import androidx.compose.animation.animateColorAsState
+import androidx.compose.animation.core.Animatable
+import androidx.compose.animation.core.FastOutSlowInEasing
+import androidx.compose.animation.core.RepeatMode
 import androidx.compose.animation.core.Spring
+import androidx.compose.animation.core.animateDpAsState
+import androidx.compose.animation.core.animateFloat
 import androidx.compose.animation.core.animateFloatAsState
+import androidx.compose.animation.core.infiniteRepeatable
+import androidx.compose.animation.core.rememberInfiniteTransition
 import androidx.compose.animation.core.spring
+import androidx.compose.animation.core.tween
+import androidx.compose.animation.fadeIn
+import androidx.compose.animation.fadeOut
+import androidx.compose.animation.scaleIn
+import androidx.compose.animation.scaleOut
+import androidx.compose.animation.togetherWith
 import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.background
@@ -13,9 +27,11 @@ import androidx.compose.foundation.gestures.awaitEachGesture
 import androidx.compose.foundation.gestures.awaitFirstDown
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
+import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
@@ -58,8 +74,10 @@ import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.material3.minimumInteractiveComponentSize
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableFloatStateOf
+import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
@@ -76,9 +94,11 @@ import androidx.compose.ui.graphics.StrokeCap
 import androidx.compose.ui.graphics.StrokeJoin
 import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.graphics.graphicsLayer
+import androidx.compose.ui.graphics.lerp
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.platform.LocalDensity
+import androidx.compose.ui.platform.LocalView
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.text.font.FontWeight
@@ -107,6 +127,9 @@ import com.example.ui.theme.EditorialPink
 import com.example.ui.theme.IncomeDarkGreen
 import com.example.ui.theme.InkBlack
 import com.example.ui.theme.InterTightFontFamily
+import com.example.ui.theme.LocalReducedMotion
+import com.example.ui.theme.Motion
+import com.example.ui.theme.NewTransactionHighlightTracker
 import com.example.ui.theme.PaleMintHero
 import com.example.ui.theme.PaleTintCardPalette
 import com.example.ui.theme.PaleYellowTint
@@ -120,8 +143,10 @@ import com.example.util.MoneyUtils
 import kotlin.math.roundToInt
 
 /**
- * Reusable 3D Extruded Container that renders a tactile 3D offset depth block behind the content
- * and optionally adds interactive 3D touch-tilt perspective.
+ * Reusable 3D Extruded Container that renders a tactile 3D offset depth block behind the content.
+ * Implements Requirement 3 (Press feedback):
+ * On press, the element translates toward its black offset shadow (+depthX, +depthY) and the shadow
+ * shrinks to nothing so it looks like a real chunky button being pushed in; on release it springs back.
  */
 @Composable
 fun Editorial3DLayerBox(
@@ -134,50 +159,65 @@ fun Editorial3DLayerBox(
     enableInteractiveTilt: Boolean = false,
     staticTiltX: Float = 0f,
     staticTiltY: Float = 0f,
+    externalPressed: Boolean = false,
     content: @Composable () -> Unit
 ) {
-    val density = LocalDensity.current.density
+    val densityObj = LocalDensity.current
+    val density = densityObj.density
+    val reducedMotion = LocalReducedMotion.current
+
     var touchTiltX by remember { mutableFloatStateOf(0f) }
     var touchTiltY by remember { mutableFloatStateOf(0f) }
+    var isPressed by remember { mutableStateOf(false) }
 
     val animTiltX by animateFloatAsState(
-        targetValue = staticTiltX + touchTiltX,
-        animationSpec = spring(dampingRatio = Spring.DampingRatioMediumBouncy, stiffness = Spring.StiffnessLow),
+        targetValue = if (reducedMotion) staticTiltX else staticTiltX + touchTiltX,
+        animationSpec = Motion.physicalSpring(reducedMotion = reducedMotion),
         label = "3dTiltX"
     )
     val animTiltY by animateFloatAsState(
-        targetValue = staticTiltY + touchTiltY,
-        animationSpec = spring(dampingRatio = Spring.DampingRatioMediumBouncy, stiffness = Spring.StiffnessLow),
+        targetValue = if (reducedMotion) staticTiltY else staticTiltY + touchTiltY,
+        animationSpec = Motion.physicalSpring(reducedMotion = reducedMotion),
         label = "3dTiltY"
     )
+    val pressFraction by animateFloatAsState(
+        targetValue = if (isPressed || externalPressed) 1f else 0f,
+        animationSpec = Motion.pressSpring(reducedMotion = reducedMotion),
+        label = "3dPressFraction"
+    )
 
-    val gestureMod = if (enableInteractiveTilt) {
-        Modifier.pointerInput(Unit) {
-            awaitEachGesture {
-                val down = awaitFirstDown(requireUnconsumed = false)
-                val w = size.width.toFloat().coerceAtLeast(1f)
-                val h = size.height.toFloat().coerceAtLeast(1f)
-                fun update(pos: Offset) {
+    val gestureMod = Modifier.pointerInput(enableInteractiveTilt) {
+        awaitEachGesture {
+            val down = awaitFirstDown(requireUnconsumed = false)
+            isPressed = true
+            val w = size.width.toFloat().coerceAtLeast(1f)
+            val h = size.height.toFloat().coerceAtLeast(1f)
+            fun update(pos: Offset) {
+                if (enableInteractiveTilt) {
                     val nx = ((pos.x / w) - 0.5f) * 2f
                     val ny = ((pos.y / h) - 0.5f) * 2f
-                    touchTiltY = (nx * 5.5f).coerceIn(-6.5f, 6.5f)
-                    touchTiltX = (-ny * 5.5f).coerceIn(-6.5f, 6.5f)
+                    touchTiltY = (nx * 4.5f).coerceIn(-5.5f, 5.5f)
+                    touchTiltX = (-ny * 4.5f).coerceIn(-5.5f, 5.5f)
                 }
-                update(down.position)
-                do {
-                    val event = awaitPointerEvent()
-                    val change = event.changes.firstOrNull()
-                    if (change != null && change.pressed) {
-                        update(change.position)
-                    }
-                } while (event.changes.any { it.pressed })
-                touchTiltX = 0f
-                touchTiltY = 0f
             }
+            update(down.position)
+            do {
+                val event = awaitPointerEvent()
+                val change = event.changes.firstOrNull()
+                if (change != null && change.pressed) {
+                    update(change.position)
+                }
+            } while (event.changes.any { it.pressed })
+            isPressed = false
+            touchTiltX = 0f
+            touchTiltY = 0f
         }
-    } else {
-        Modifier
     }
+
+    val depthXPx = with(densityObj) { depthX.toPx() }
+    val depthYPx = with(densityObj) { depthY.toPx() }
+    val pushTranslateXPx = depthXPx * pressFraction
+    val pushTranslateYPx = depthYPx * pressFraction
 
     Box(
         modifier = modifier
@@ -187,7 +227,7 @@ fun Editorial3DLayerBox(
         val dynamicOffsetX = (depthX.value - animTiltY * 0.35f).roundToInt()
         val dynamicOffsetY = (depthY.value + animTiltX * 0.35f).roundToInt()
 
-        // 3D Extruded Depth Base Block
+        // 3D Extruded Depth Base Block (stays anchored at the offset so as the foreground pushes into it, the visible shadow shrinks to 0)
         Box(
             modifier = Modifier
                 .matchParentSize()
@@ -203,9 +243,11 @@ fun Editorial3DLayerBox(
                 )
         )
 
-        // Elevated Foreground Card Layer with 3D perspective
+        // Elevated Foreground Card Layer with 3D perspective & push-into-shadow translation
         Box(
             modifier = Modifier.graphicsLayer {
+                translationX = pushTranslateXPx
+                translationY = pushTranslateYPx
                 rotationX = animTiltX
                 rotationY = animTiltY
                 cameraDistance = 14f * density
@@ -363,6 +405,14 @@ fun WhitePillDropdown(
     fillWidth: Boolean = false,
     testTag: String? = null
 ) {
+    val view = LocalView.current
+    val reducedMotion = LocalReducedMotion.current
+    var toggleSpin by remember { mutableStateOf(false) }
+    val chevronRotation by animateFloatAsState(
+        targetValue = if (toggleSpin) 180f else 0f,
+        animationSpec = Motion.physicalSpring(reducedMotion = reducedMotion),
+        label = "dropdownChevronRotation"
+    )
     val taggedModifier = if (testTag != null) modifier.testTag(testTag) else modifier
     Editorial3DLayerBox(
         modifier = taggedModifier.minimumInteractiveComponentSize(),
@@ -372,7 +422,11 @@ fun WhitePillDropdown(
         depthY = 4.dp
     ) {
         Surface(
-            onClick = onClick,
+            onClick = {
+                Motion.performLightTapHaptic(view)
+                toggleSpin = !toggleSpin
+                onClick()
+            },
             modifier = if (fillWidth) Modifier.fillMaxWidth() else Modifier,
             shape = CircleShape,
             color = backgroundColor,
@@ -389,22 +443,38 @@ fun WhitePillDropdown(
                     Arrangement.spacedBy(6.dp)
                 }
             ) {
-                Text(
-                    text = label,
-                    style = MaterialTheme.typography.labelLarge.copy(
-                        fontWeight = FontWeight.SemiBold,
-                        fontSize = 13.sp
-                    ),
-                    color = textColor,
-                    maxLines = 1,
-                    overflow = TextOverflow.Ellipsis,
-                    modifier = if (fillWidth) Modifier.weight(1f, fill = false) else Modifier
-                )
+                // Anchor scale + fade transition when the selected filter label changes
+                AnimatedContent(
+                    targetState = label,
+                    transitionSpec = {
+                        (fadeIn(Motion.quickTween(reducedMotion)) +
+                            scaleIn(initialScale = 0.92f, animationSpec = Motion.physicalSpring(reducedMotion)))
+                            .togetherWith(
+                                fadeOut(Motion.quickTween(reducedMotion)) +
+                                    scaleOut(targetScale = 0.94f, animationSpec = Motion.quickTween(reducedMotion))
+                            )
+                    },
+                    modifier = if (fillWidth) Modifier.weight(1f, fill = false) else Modifier,
+                    label = "dropdownLabelAnim"
+                ) { targetLabel ->
+                    Text(
+                        text = targetLabel,
+                        style = MaterialTheme.typography.labelLarge.copy(
+                            fontWeight = FontWeight.SemiBold,
+                            fontSize = 13.sp
+                        ),
+                        color = textColor,
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis
+                    )
+                }
                 Icon(
                     imageVector = Icons.Default.KeyboardArrowDown,
                     contentDescription = null,
                     tint = textColor,
-                    modifier = Modifier.size(16.dp)
+                    modifier = Modifier
+                        .size(16.dp)
+                        .graphicsLayer { rotationZ = chevronRotation }
                 )
             }
         }
@@ -428,20 +498,23 @@ fun RoundArrowButton(
     contentDescription: String = "View details",
     testTag: String? = null
 ) {
+    val view = LocalView.current
     val circleBg = customCircleColor ?: if (onColoredCard) InkBlack else PureWhite
     val iconTint = customIconTint ?: if (onColoredCard) PureWhite else InkBlack
     val tagged = if (testTag != null) modifier.testTag(testTag) else modifier
 
-    Box(modifier = tagged.padding(end = 2.dp, bottom = 3.dp)) {
-        Box(
-            modifier = Modifier
-                .size(size)
-                .offset(x = 2.dp, y = 3.dp)
-                .clip(CircleShape)
-                .background(if (circleBg == InkBlack) PureWhite.copy(alpha = 0.28f) else InkBlack)
-        )
+    Editorial3DLayerBox(
+        modifier = tagged,
+        shape = CircleShape,
+        extrusionColor = if (circleBg == InkBlack) PureWhite.copy(alpha = 0.28f) else InkBlack,
+        depthX = 2.dp,
+        depthY = 3.dp
+    ) {
         Surface(
-            onClick = onClick,
+            onClick = {
+                Motion.performLightTapHaptic(view)
+                onClick()
+            },
             modifier = Modifier.size(size),
             shape = CircleShape,
             color = circleBg,
@@ -701,6 +774,25 @@ fun PaleMintIllustratedHeroCard(
     modifier: Modifier = Modifier,
     captionText: String? = null
 ) {
+    val reducedMotion = LocalReducedMotion.current
+    val density = LocalDensity.current
+    val bobAmplitudePx = with(density) { Motion.EMPTY_BOB_AMPLITUDE.toPx() }
+    val bobOffsetPx = if (reducedMotion) {
+        0f
+    } else {
+        val infiniteTransition = rememberInfiniteTransition(label = "emptyHeroBob")
+        val animBob by infiniteTransition.animateFloat(
+            initialValue = -bobAmplitudePx,
+            targetValue = bobAmplitudePx,
+            animationSpec = infiniteRepeatable(
+                animation = tween(durationMillis = Motion.BOB_CYCLE_MS / 2, easing = FastOutSlowInEasing),
+                repeatMode = RepeatMode.Reverse
+            ),
+            label = "emptyHeroBobOffset"
+        )
+        animBob
+    }
+
     val shape = RoundedCornerShape(28.dp)
     Editorial3DLayerBox(
         modifier = modifier.fillMaxWidth(),
@@ -728,6 +820,9 @@ fun PaleMintIllustratedHeroCard(
                     modifier = Modifier
                         .fillMaxWidth()
                         .height(175.dp)
+                        .graphicsLayer {
+                            translationY = bobOffsetPx
+                        }
                 ) {
                     val w = size.width
                     val h = size.height
@@ -1084,6 +1179,7 @@ fun YuEditorialTopBar(
 
 /**
  * Playful 3D-extruded candy circle button used in the Top Bar.
+ * Includes push-into-shadow press feedback, light haptic tick, and rotating/scaling icon swap (Moon/Sun).
  */
 @Composable
 fun Playful3DCircleActionButton(
@@ -1095,22 +1191,22 @@ fun Playful3DCircleActionButton(
     size: Dp = 40.dp,
     testTag: String? = null
 ) {
+    val view = LocalView.current
+    val reducedMotion = LocalReducedMotion.current
     val tagged = if (testTag != null) Modifier.testTag(testTag) else Modifier
-    Box(
-        modifier = tagged
-            .minimumInteractiveComponentSize()
-            .padding(end = 2.dp, bottom = 3.dp),
-        contentAlignment = Alignment.Center
+
+    Editorial3DLayerBox(
+        modifier = tagged.minimumInteractiveComponentSize(),
+        shape = CircleShape,
+        extrusionColor = InkBlack,
+        depthX = 2.dp,
+        depthY = 3.dp
     ) {
-        Box(
-            modifier = Modifier
-                .size(size)
-                .offset(x = 2.dp, y = 3.dp)
-                .clip(CircleShape)
-                .background(InkBlack)
-        )
         Surface(
-            onClick = onClick,
+            onClick = {
+                Motion.performLightTapHaptic(view)
+                onClick()
+            },
             modifier = Modifier.size(size),
             shape = CircleShape,
             color = containerColor,
@@ -1118,12 +1214,35 @@ fun Playful3DCircleActionButton(
             border = BorderStroke(1.6.dp, InkBlack)
         ) {
             Box(contentAlignment = Alignment.Center) {
-                Icon(
-                    imageVector = icon,
-                    contentDescription = contentDescription,
-                    tint = iconTint,
-                    modifier = Modifier.size(19.dp)
+                // 10. THEME TOGGLE: Moon/Sun icon rotates and swaps with a quick scale
+                val spinAngle by animateFloatAsState(
+                    targetValue = if (icon == Icons.Default.LightMode) 0f else 180f,
+                    animationSpec = Motion.physicalSpring(reducedMotion = reducedMotion),
+                    label = "topBarIconSpin"
                 )
+                AnimatedContent(
+                    targetState = icon,
+                    transitionSpec = {
+                        (fadeIn(Motion.quickTween(reducedMotion)) +
+                            scaleIn(initialScale = 0.55f, animationSpec = Motion.physicalSpring(reducedMotion)))
+                            .togetherWith(
+                                fadeOut(Motion.quickTween(reducedMotion)) +
+                                    scaleOut(targetScale = 0.55f, animationSpec = Motion.quickTween(reducedMotion))
+                            )
+                    },
+                    label = "topBarIconSwap"
+                ) { targetIcon ->
+                    Icon(
+                        imageVector = targetIcon,
+                        contentDescription = contentDescription,
+                        tint = iconTint,
+                        modifier = Modifier
+                            .size(19.dp)
+                            .graphicsLayer {
+                                rotationZ = if (targetIcon == Icons.Default.LightMode) spinAngle else spinAngle - 180f
+                            }
+                    )
+                }
             }
         }
     }
@@ -1295,27 +1414,25 @@ fun BlackCircleIconButton(
     forceInkBlack: Boolean = false,
     testTag: String? = null
 ) {
+    val view = LocalView.current
     val colors = SnapSpendThemeTokens.colors
     val useWhiteCircle = colors.isDark && !forceInkBlack
     val containerColor = if (useWhiteCircle) PureWhite else InkBlack
     val iconTint = if (useWhiteCircle) InkBlack else PureWhite
     val taggedModifier = if (testTag != null) modifier.testTag(testTag) else modifier
 
-    Box(
-        modifier = taggedModifier
-            .minimumInteractiveComponentSize()
-            .padding(end = 2.dp, bottom = 3.dp),
-        contentAlignment = Alignment.Center
+    Editorial3DLayerBox(
+        modifier = taggedModifier.minimumInteractiveComponentSize(),
+        shape = CircleShape,
+        extrusionColor = if (useWhiteCircle) EditorialAqua else InkBlack.copy(alpha = 0.45f),
+        depthX = 2.dp,
+        depthY = 3.dp
     ) {
-        Box(
-            modifier = Modifier
-                .size(size)
-                .offset(x = 2.dp, y = 3.dp)
-                .clip(CircleShape)
-                .background(if (useWhiteCircle) EditorialAqua else InkBlack.copy(alpha = 0.45f))
-        )
         Surface(
-            onClick = onClick,
+            onClick = {
+                Motion.performLightTapHaptic(view)
+                onClick()
+            },
             modifier = Modifier.size(size),
             shape = CircleShape,
             color = containerColor,
@@ -1348,18 +1465,21 @@ fun BrightCardCornerIconButton(
     modifier: Modifier = Modifier,
     testTag: String? = null
 ) {
+    val view = LocalView.current
     val taggedModifier = if (testTag != null) modifier.testTag(testTag) else modifier
 
-    Box(modifier = taggedModifier.padding(end = 2.dp, bottom = 2.dp)) {
-        Box(
-            modifier = Modifier
-                .size(40.dp)
-                .offset(x = 2.dp, y = 2.dp)
-                .clip(CircleShape)
-                .background(PureWhite.copy(alpha = 0.45f))
-        )
+    Editorial3DLayerBox(
+        modifier = taggedModifier,
+        shape = CircleShape,
+        extrusionColor = PureWhite.copy(alpha = 0.45f),
+        depthX = 2.dp,
+        depthY = 2.dp
+    ) {
         Surface(
-            onClick = onClick,
+            onClick = {
+                Motion.performLightTapHaptic(view)
+                onClick()
+            },
             modifier = Modifier.size(40.dp),
             shape = CircleShape,
             color = InkBlack,
@@ -1390,6 +1510,7 @@ fun WideSecondaryPillButton(
     containerColor: Color = EditorialLavender,
     testTag: String? = null
 ) {
+    val view = LocalView.current
     val tagged = if (testTag != null) modifier.testTag(testTag) else modifier
 
     Editorial3DLayerBox(
@@ -1403,7 +1524,10 @@ fun WideSecondaryPillButton(
         depthY = 5.dp
     ) {
         Surface(
-            onClick = onClick,
+            onClick = {
+                Motion.performLightTapHaptic(view)
+                onClick()
+            },
             modifier = Modifier.fillMaxWidth(),
             shape = CircleShape,
             color = containerColor,
@@ -1435,7 +1559,9 @@ fun WideSecondaryPillButton(
 }
 
 /**
- * Segmented toggle with 3D extruded track (small control — white track with Aqua selected pill & black text in both themes).
+ * 6. SEGMENTED CONTROLS:
+ * Segmented toggle with 3D extruded track (white track with sliding Aqua #8FE3F0 selected pill & black text in both themes).
+ * The selected Aqua pill slides smoothly from one option to the next with a spring, and the label color cross-fades.
  */
 @Composable
 fun SegmentedPillToggle(
@@ -1445,6 +1571,10 @@ fun SegmentedPillToggle(
     modifier: Modifier = Modifier,
     testTagPrefix: String = "segmented_option"
 ) {
+    val view = LocalView.current
+    val reducedMotion = LocalReducedMotion.current
+    val safeSelectedIndex = selectedIndex.coerceIn(0, (options.size - 1).coerceAtLeast(0))
+
     Editorial3DLayerBox(
         modifier = modifier.fillMaxWidth(),
         shape = CircleShape,
@@ -1458,44 +1588,70 @@ fun SegmentedPillToggle(
             color = PureWhite,
             border = BorderStroke(1.8.dp, InkBlack)
         ) {
-            Row(
+            BoxWithConstraints(
                 modifier = Modifier
                     .fillMaxWidth()
-                    .padding(4.dp),
-                horizontalArrangement = Arrangement.spacedBy(4.dp),
-                verticalAlignment = Alignment.CenterVertically
+                    .padding(4.dp)
             ) {
-                options.forEachIndexed { index, label ->
-                    val isSelected = index == selectedIndex
-                    val pillBg by animateColorAsState(
-                        targetValue = if (isSelected) EditorialAqua else Color.Transparent,
-                        label = "segPillBg"
-                    )
-                    val textColor = if (isSelected) InkBlack else InkBlack.copy(alpha = 0.78f)
+                val count = options.size.coerceAtLeast(1)
+                val gap = 4.dp
+                val totalGap = gap * (count - 1)
+                val pillWidth = ((maxWidth - totalGap) / count).coerceAtLeast(0.dp)
+                val targetOffsetX = (pillWidth + gap) * safeSelectedIndex
+                val animatedOffsetX by animateDpAsState(
+                    targetValue = targetOffsetX,
+                    animationSpec = Motion.physicalSpring(reducedMotion = reducedMotion),
+                    label = "segSlidingPillOffset"
+                )
 
-                    Box(
-                        modifier = Modifier
-                            .weight(1f)
-                            .minimumInteractiveComponentSize()
-                            .clip(CircleShape)
-                            .background(pillBg)
-                            .then(
-                                if (isSelected) Modifier.border(1.2.dp, InkBlack, CircleShape) else Modifier
-                            )
-                            .clickable(role = Role.Tab) { onOptionSelected(index) }
-                            .padding(vertical = 10.dp, horizontal = 8.dp)
-                            .testTag("${testTagPrefix}_$index"),
-                        contentAlignment = Alignment.Center
-                    ) {
-                        Text(
-                            text = label,
-                            style = MaterialTheme.typography.labelLarge.copy(
-                                fontWeight = FontWeight.SemiBold
-                            ),
-                            color = textColor,
-                            maxLines = 1,
-                            overflow = TextOverflow.Ellipsis
+                // Sliding Aqua (#8FE3F0) Selected Pill Indicator
+                Box(
+                    modifier = Modifier
+                        .offset(x = animatedOffsetX)
+                        .width(pillWidth)
+                        .height(38.dp)
+                        .clip(CircleShape)
+                        .background(EditorialAqua)
+                        .border(1.2.dp, InkBlack, CircleShape)
+                )
+
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.spacedBy(gap),
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    options.forEachIndexed { index, label ->
+                        val isSelected = index == safeSelectedIndex
+                        val textColor by animateColorAsState(
+                            targetValue = if (isSelected) InkBlack else InkBlack.copy(alpha = 0.72f),
+                            animationSpec = Motion.quickTween(reducedMotion = reducedMotion),
+                            label = "segPillTextColor"
                         )
+
+                        Box(
+                            modifier = Modifier
+                                .weight(1f)
+                                .height(38.dp)
+                                .minimumInteractiveComponentSize()
+                                .clip(CircleShape)
+                                .clickable(role = Role.Tab) {
+                                    Motion.performLightTapHaptic(view)
+                                    onOptionSelected(index)
+                                }
+                                .padding(horizontal = 8.dp)
+                                .testTag("${testTagPrefix}_$index"),
+                            contentAlignment = Alignment.Center
+                        ) {
+                            Text(
+                                text = label,
+                                style = MaterialTheme.typography.labelLarge.copy(
+                                    fontWeight = if (isSelected) FontWeight.Bold else FontWeight.SemiBold
+                                ),
+                                color = textColor,
+                                maxLines = 1,
+                                overflow = TextOverflow.Ellipsis
+                            )
+                        }
                     }
                 }
             }
@@ -1512,6 +1668,10 @@ fun <T> SegmentedPillToggle(
     modifier: Modifier = Modifier,
     optionTestTagProvider: ((T) -> String)? = null
 ) {
+    val view = LocalView.current
+    val reducedMotion = LocalReducedMotion.current
+    val selectedIndex = options.indexOf(selectedOption).coerceAtLeast(0)
+
     Editorial3DLayerBox(
         modifier = modifier.fillMaxWidth(),
         shape = CircleShape,
@@ -1525,45 +1685,71 @@ fun <T> SegmentedPillToggle(
             color = PureWhite,
             border = BorderStroke(1.8.dp, InkBlack)
         ) {
-            Row(
+            BoxWithConstraints(
                 modifier = Modifier
                     .fillMaxWidth()
-                    .padding(4.dp),
-                horizontalArrangement = Arrangement.spacedBy(4.dp),
-                verticalAlignment = Alignment.CenterVertically
+                    .padding(4.dp)
             ) {
-                options.forEachIndexed { index, option ->
-                    val isSelected = option == selectedOption
-                    val pillBg by animateColorAsState(
-                        targetValue = if (isSelected) EditorialAqua else Color.Transparent,
-                        label = "segGenericPillBg"
-                    )
-                    val textColor = if (isSelected) InkBlack else InkBlack.copy(alpha = 0.78f)
-                    val tag = optionTestTagProvider?.invoke(option) ?: "segmented_option_$index"
+                val count = options.size.coerceAtLeast(1)
+                val gap = 4.dp
+                val totalGap = gap * (count - 1)
+                val pillWidth = ((maxWidth - totalGap) / count).coerceAtLeast(0.dp)
+                val targetOffsetX = (pillWidth + gap) * selectedIndex
+                val animatedOffsetX by animateDpAsState(
+                    targetValue = targetOffsetX,
+                    animationSpec = Motion.physicalSpring(reducedMotion = reducedMotion),
+                    label = "segGenericSlidingPillOffset"
+                )
 
-                    Box(
-                        modifier = Modifier
-                            .weight(1f)
-                            .minimumInteractiveComponentSize()
-                            .clip(CircleShape)
-                            .background(pillBg)
-                            .then(
-                                if (isSelected) Modifier.border(1.2.dp, InkBlack, CircleShape) else Modifier
-                            )
-                            .clickable(role = Role.Tab) { onOptionSelected(option) }
-                            .padding(vertical = 10.dp, horizontal = 8.dp)
-                            .testTag(tag),
-                        contentAlignment = Alignment.Center
-                    ) {
-                        Text(
-                            text = labelProvider(option),
-                            style = MaterialTheme.typography.labelLarge.copy(
-                                fontWeight = FontWeight.SemiBold
-                            ),
-                            color = textColor,
-                            maxLines = 1,
-                            overflow = TextOverflow.Ellipsis
+                // Sliding Aqua (#8FE3F0) Selected Pill Indicator
+                Box(
+                    modifier = Modifier
+                        .offset(x = animatedOffsetX)
+                        .width(pillWidth)
+                        .height(38.dp)
+                        .clip(CircleShape)
+                        .background(EditorialAqua)
+                        .border(1.2.dp, InkBlack, CircleShape)
+                )
+
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.spacedBy(gap),
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    options.forEachIndexed { index, option ->
+                        val isSelected = option == selectedOption
+                        val textColor by animateColorAsState(
+                            targetValue = if (isSelected) InkBlack else InkBlack.copy(alpha = 0.72f),
+                            animationSpec = Motion.quickTween(reducedMotion = reducedMotion),
+                            label = "segGenericTextColor"
                         )
+                        val tag = optionTestTagProvider?.invoke(option) ?: "segmented_option_$index"
+
+                        Box(
+                            modifier = Modifier
+                                .weight(1f)
+                                .height(38.dp)
+                                .minimumInteractiveComponentSize()
+                                .clip(CircleShape)
+                                .clickable(role = Role.Tab) {
+                                    Motion.performLightTapHaptic(view)
+                                    onOptionSelected(option)
+                                }
+                                .padding(horizontal = 8.dp)
+                                .testTag(tag),
+                            contentAlignment = Alignment.Center
+                        ) {
+                            Text(
+                                text = labelProvider(option),
+                                style = MaterialTheme.typography.labelLarge.copy(
+                                    fontWeight = if (isSelected) FontWeight.Bold else FontWeight.SemiBold
+                                ),
+                                color = textColor,
+                                maxLines = 1,
+                                overflow = TextOverflow.Ellipsis
+                            )
+                        }
                     }
                 }
             }
@@ -1613,7 +1799,7 @@ fun ResponsiveTabularNumberText(
 }
 
 /**
- * White 3D pill chip / filter button.
+ * White 3D pill chip / filter button with push-into-shadow press feedback and light haptic tick.
  */
 @Composable
 fun WhitePillChip(
@@ -1626,6 +1812,8 @@ fun WhitePillChip(
     enabled: Boolean = true,
     testTag: String? = null
 ) {
+    val view = LocalView.current
+    val reducedMotion = LocalReducedMotion.current
     val colors = SnapSpendThemeTokens.colors
     val targetBg = when {
         !enabled -> PureWhite.copy(alpha = 0.55f)
@@ -1640,7 +1828,11 @@ fun WhitePillChip(
         onBrightCard && selected -> PureWhite
         else -> InkBlack
     }
-    val bgColor by animateColorAsState(targetValue = targetBg, label = "chipBg")
+    val bgColor by animateColorAsState(
+        targetValue = targetBg,
+        animationSpec = Motion.quickTween(reducedMotion = reducedMotion),
+        label = "chipBg"
+    )
     val taggedModifier = if (testTag != null) modifier.testTag(testTag) else modifier
 
     Editorial3DLayerBox(
@@ -1651,7 +1843,12 @@ fun WhitePillChip(
         depthY = 3.dp
     ) {
         Surface(
-            onClick = onClick,
+            onClick = {
+                if (enabled) {
+                    Motion.performLightTapHaptic(view)
+                }
+                onClick()
+            },
             enabled = enabled,
             shape = CircleShape,
             color = bgColor,
@@ -1829,6 +2026,38 @@ fun EditorialTransactionCard(
     avatarBadgeColor: Color = categoryDotColor,
     staticTiltX: Float = 0f
 ) {
+    val reducedMotion = LocalReducedMotion.current
+    val density = LocalDensity.current
+    val isNewlyAdded = remember(transaction.id) {
+        NewTransactionHighlightTracker.consumeFlashIfNew(transaction.id)
+    }
+    val slideInProgress = remember(transaction.id) {
+        Animatable(if (isNewlyAdded && !reducedMotion) 0f else 1f)
+    }
+    val flashIntensity = remember(transaction.id) {
+        Animatable(if (isNewlyAdded && !reducedMotion) 1f else 0f)
+    }
+
+    LaunchedEffect(isNewlyAdded, reducedMotion) {
+        if (isNewlyAdded && !reducedMotion) {
+            slideInProgress.animateTo(
+                targetValue = 1f,
+                animationSpec = Motion.physicalSpring(reducedMotion = false)
+            )
+            flashIntensity.animateTo(
+                targetValue = 0f,
+                animationSpec = tween(durationMillis = Motion.HIGHLIGHT_FLASH_MS, easing = FastOutSlowInEasing)
+            )
+        }
+    }
+
+    val slideDistancePx = with(density) { 18.dp.toPx() }
+    val effectiveCardColor = if (flashIntensity.value > 0.01f) {
+        lerp(cardColor, SunnyYellow, flashIntensity.value * 0.65f)
+    } else {
+        cardColor
+    }
+
     val prefix = when (transaction.type) {
         TransactionType.EXPENSE -> "-"
         TransactionType.EARNING -> "+"
@@ -1844,7 +2073,13 @@ fun EditorialTransactionCard(
     val shape = RoundedCornerShape(28.dp)
 
     Editorial3DLayerBox(
-        modifier = modifier.fillMaxWidth(),
+        modifier = modifier
+            .fillMaxWidth()
+            .graphicsLayer {
+                val p = slideInProgress.value.coerceIn(0f, 1.1f)
+                translationY = -(1f - p) * slideDistancePx
+                alpha = p.coerceIn(0f, 1f)
+            },
         shape = shape,
         extrusionColor = InkBlack,
         extrusionBorderColor = InkBlack,
@@ -1859,9 +2094,9 @@ fun EditorialTransactionCard(
                 .fillMaxWidth()
                 .testTag("tx_card_${transaction.id}"),
             shape = shape,
-            color = cardColor,
+            color = effectiveCardColor,
             contentColor = InkBlack,
-            border = BorderStroke(1.8.dp, InkBlack)
+            border = BorderStroke(if (flashIntensity.value > 0.1f) 2.6.dp else 1.8.dp, InkBlack)
         ) {
             Row(
                 modifier = Modifier
