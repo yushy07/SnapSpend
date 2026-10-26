@@ -1,121 +1,93 @@
-# SnapSpend Unified Motion & Transition System Plan
+# SnapSpend Smoketest Bug Audit & Remediation Plan
 
-A cohesive, interruptible 60fps motion system across every screen, card, button, chart, sheet, and dialog in both Light and Dark themes—preserving all existing data, calculations, and the 3D swipeable category card deck while making the entire app feel tactile and alive.
-
----
-
-## User Review & Critical Decisions
-
-> [!IMPORTANT]
-> **Shared Motion Tokens & Accessibility First:**
-> Every animation in the app will read from a single centralized motion specification and respect the Android system **"Remove animations"** (`Settings.Global.ANIMATOR_DURATION_SCALE == 0f`) setting via a `LocalReducedMotion` composition local. When reduced motion is active, spring and tween transitions resolve instantaneously without visual lag or looping effects.
-
-- **Exact Shared Timings & Springs (`Motion` Tokens)**:
-  - **Quick (Taps, Presses, Check-Mark Pop, Icon Swaps)**: `120ms` (`FastOutSlowInEasing`), or tactile press spring (`dampingRatio = 0.65f`, `stiffness = 650f`).
-  - **Normal (Tab Slides, Card Staggered Entrances, Sheets, Dialogs, Theme Cross-Fade)**: `300ms` (`CubicBezierEasing(0.2f, 0f, 0f, 1f)`), with `200ms` fast exit/dismiss and `50ms` per-item entrance stagger (capped at the first 8 items).
-  - **Charts & Money Counters**: `600ms` (`CubicBezierEasing(0.16f, 1f, 0.3f, 1f)` ease-out) for money count-ups, area chart line draw, donut sweep, and progress bar fills; `30ms` per-bar stagger on bar charts.
-  - **Physical Object Spring (Shared with Category Card Deck)**: Medium-bouncy spring (`dampingRatio = Spring.DampingRatioMediumBouncy` / `0.58f`, `stiffness = Spring.StiffnessMediumLow` / `320f`) for sliding pills, tooltips, bottom sheets, and card physics.
-- **60fps Performance & What We Skip / Optimize**:
-  - **Skipped**: Animating intrinsic layout height/width per frame inside long scrolling `LazyColumn` rows, and running infinite bobbing loops when an empty-state illustration is off-screen.
-  - **Why**: Layout re-measurement on every animation frame causes dropped frames on mid-range phones. Instead, all press-in depth shifts, card entrances, dialog scales, and chart reveals run on the RenderThread via `Modifier.graphicsLayer` and `Canvas` draw fractions.
+A targeted, production-grade remediation plan addressing potential bugs, edge-case crashes, and data corruption risks identified during the smoketest audit across data persistence, receipt scanning, and UI state boundaries, backed by automated Robolectric test suites.
 
 ---
 
-## 1. Overview & Core Concept
+## 1. Audit Findings: Potential Bugs & Edge Cases
 
-- **What It Does**: Unifies all micro-interactions, screen transitions, number count-ups, chart builds, and AI scanning feedback under one consistent physical motion language.
-- **Target Audience / Persona**: Everyday mobile users tracking expenses who want immediate, physical button feedback and smooth visual continuity when switching tabs, filtering charts, or scanning receipts.
-- **Key Value**: Every interaction feels responsive and interruptible—buttons physically press into their black 3D shadows, numbers roll smoothly in tabular numerals, and charts draw progressively without ever blocking touch input.
+### A. Data Persistence & Backup Resilience
+1. **RFC 4180 CSV Export/Import Column Corruption**:
+   - **Bug**: In `DriveBackupAndExportManager.kt`, CSV export naively concatenates fields (`"$id,$epochMs,$title,$merchant,$category,$type,$amountPaise,$source,$notes,$verified"`) and import splits lines with `line.split(",")`.
+   - **Failure Mode**: If a merchant name (e.g., `"Trader Joe's, LLC"`) or note (e.g., `"Groceries, fruit, & bread"`) contains commas, quotes, or newlines, import splits into 11+ parts and fails or silently misassigns columns, corrupting transaction amounts and types.
+   - **Fix**: Implement RFC 4180 compliant CSV serialization and parsing: wrap fields containing commas, quotes, or newlines in standard escaped double-quotes (`""`), and parse quoted multi-token fields properly.
+2. **Drive Backup / Export Empty State Handling**:
+   - **Bug**: Exporting when 0 transactions exist creates an empty CSV or backup payload that might trigger an index out-of-bounds or empty file exception upon import.
+   - **Fix**: Handle empty datasets gracefully with valid headers and return informative UI feedback rather than throwing exceptions.
 
----
+### B. Receipt Scanning & Permissions
+1. **Camera Quick Scan Hardware & Permission Boundary**:
+   - **Bug**: `QuickAddSourceBottomSheet` features `"Quick Scan with Camera"`. If a user device lacks a rear camera or the camera permission is rejected, directly launching the camera intent can throw an unhandled `ActivityNotFoundException` or runtime permission fault.
+   - **Fix**: Verify camera availability via package manager, wrap camera intent launcher in graceful exception handling, and provide an automatic fallback to the zero-permission Android Photo Picker (`ActivityResultContracts.PickVisualMedia`).
+2. **Transient Media URI Lifetime**:
+   - **Bug**: When an image is picked via Photo Picker or Camera, accessing `contentResolver.openInputStream(uri)` after a configuration change or process recreation can throw `SecurityException` or `FileNotFoundException`.
+   - **Fix**: Read and buffer the image bytes immediately into application cache upon selection before passing to the Gemini extraction pipeline, accompanied by a user-facing retry prompt if reading fails.
+3. **Queued Scans Offline Persistence**:
+   - **Bug**: Tapping `"Queue for later"` during network dropouts must persist the pending scan to Room/SQLite so it survives app restarts.
+   - **Fix**: Ensure pending queue items are stored in persistent storage with retry badges on the Home screen.
 
-## 2. User Experience & Visual Design
-
-### 0. Centralized Motion Specification & Accessibility
-- All durations, easing curves, stagger delays, and spring specs live in one place and adapt automatically when Android's animator duration scale is set to `0x`.
-
-### 1. Screen Switching (Bottom Navigation)
-- **Directional Tab Slide + Fade (`300ms`)**: Switching to a tab further right slides the incoming screen in from `+24.dp` with a fade-in while the outgoing screen fades out; switching to a tab further left slides in from `-24.dp`.
-- **Sliding Aqua Tab Pill & Spring Label**: The selected Aqua (`#8FE3F0`) pill glides smoothly across the bottom bar to the newly selected tab, and its text label expands/collapses using the shared medium-bouncy spring, paired with a light haptic tick on tap.
-
-### 2. First-Open Screen Entrance (Once per Tab Session)
-- **Staggered 24.dp Upward Reveal**: The first time each screen opens, its visible top-level cards fade in and slide up from `24.dp` one after another (`50ms` delay per item, capped at the first `8` items). Scrolling up and down afterward never re-triggers the entrance animation.
-
-### 3. Tactile 3D Press Feedback (Buttons, Chips, Cards, Pills)
-- **Push-Into-Shadow Physics**: On press (`awaitFirstDown` / `collectIsPressedAsState`), the foreground card or pill translates diagonally toward its black offset shadow (`+depthX`, `+depthY`) while the shadow offset shrinks to `(0.dp, 0.dp)`, looking like a real chunky mechanical button being pressed flush. Releasing springs it back with medium bounce.
-- **Haptic Tick**: Main buttons, bottom nav tabs, segmented toggles, and filter chips trigger a light haptic tick on tap.
-
-### 4. Counting Money Totals (`600ms` Ease-Out, Tabular Numerals)
-- **Smooth Paise Counter**: Hero balance (`What's left`), `Total spent`, `Total earned`, chart summary boxes, and category totals animate smoothly from their previous paise value to the new target paise value over `600ms` ease-out using `fontFeatureSettings = "tnum"`. When the animation settles, it displays the exact integer paise amount.
-
-### 5. Progressive & Animated Charts
-- **Area Chart (`Spending Over Time`)**: The stroke line draws progressively from left to right (`0% → 100%` width), followed by a smooth fade-in of the 3D Coral area fill underneath. Switching between `This Week` and `This Month` interpolates point heights smoothly.
-- **Bar Charts (`Coral Comparison` & `In vs Out`)**: Bars grow upward from the baseline one after another (`30ms` stagger). The selected bar's black tooltip bubble pops in with a bouncy scale spring (`0.6f → 1.0f`).
-- **Donut Chart (`By Category`)**: Slices sweep clockwise from `-90°` at the top one after another.
-- **Progress Bars (`What's left` & Category Budgets)**: Fill smoothly from `0f` to the target fraction (and between old and new fractions when filters change).
-
-### 6. Segmented Controls & Filter Dropdowns
-- **Sliding Indicator Pill**: In `Overview / Trends / Categories & Bills`, `Expenses / Earnings`, and `System / Light / Dark`, a single Aqua (`#8FE3F0`) indicator pill slides horizontally from the previous option to the newly selected option using the shared spring, while label colors cross-fade over `200ms`.
-- **Dropdown Anchor Scale + Fade**: Filter dropdown pills trigger a crisp scale + fade transition (`0.92f → 1.0f`) anchored to the control.
-
-### 7. Bottom Sheets & Dialogs
-- **Quick Scan & Add Sheet**: Slides up with a medium-bouncy spring while its 5 colored option cards stagger in one after another (`40ms` apart).
-- **Dialogs**: Scale in from `90% → 100%` with a `250ms` fade-in, and reverse faster (`160ms`) on dismiss.
-
-### 8. Lists & Confirm Button Pop
-- **Transactions List**: Newly added payments slide in from the top and briefly flash a warm highlight border/tint (`600ms`); deleted items shrink and fade out while remaining rows glide into place via `animateItem()`.
-- **Confirm Check-Mark Pop**: When confirming scanned drafts, the confirm button plays a quick check-mark scale pop (`1.0f → 1.22f → 1.0f` over `220ms`) before closing the review overlay.
-
-### 9. AI Scanning States (Shimmer, Laser Line, Status Cycle, Drop-In & Error Shake)
-- **Scanning State**: While Gemini reads a receipt or screenshot, display a shimmering placeholder card (soft diagonal light sweep) alongside a thin horizontal scanning line moving up and down over the receipt preview, cycling status text every `1.2s`: `"Reading amount…"` → `"Finding the date…"` → `"Picking a category…"`.
-- **Success & Error**: On success, extracted review draft cards drop in one after another (`50ms` stagger). On error, the error card performs a single horizontal shake (`-10dp → +10dp → -6dp → +6dp → 0dp` over `360ms`).
-
-### 10. Theme Toggle Rotation & 300ms App-Wide Color Cross-Fade
-- **Sun/Moon Icon Swap**: Tapping the top-bar theme button rotates (`-90° → 0°`) and scales (`0.6f → 1.0f`) the Moon/Sun icon.
-- **300ms Color Cross-Fade**: Background and theme surface tokens cross-fade smoothly over `300ms` via `animateColorAsState` instead of snapping.
-
-### 11. Empty-State Floating Illustrations
-- **Gentle 4.dp Loop**: The robot, wallet, and empty-state illustrations gently bob up and down by `±4.dp` over a `3000ms` ease-in-out loop via `rememberInfiniteTransition`—active only while the composable is in the composition (visible on screen) and disabled when reduced motion is enabled.
+### C. UI Boundary Conditions & Zero-State Math
+1. **Category Card Deck Zero/Single-Item Division Guard**:
+   - **Bug**: In `CategoriesFolderScreen.kt`, index calculations use `(frontIndex + i) % categories.size`.
+   - **Failure Mode**: If categories are cleared or custom filters produce an empty list, evaluating `% categories.size` throws `java.lang.ArithmeticException: divide by zero`.
+   - **Fix**: Add explicit empty-state fallback guard before deck layout rendering, and disable swipe physics when `categories.size <= 1`.
+2. **Chart Math Division by Zero (Empty State)**:
+   - **Bug**: In `ChartsAndInsightsScreen.kt`, `avgPerDayPaise`, MoM percentage changes, and bar chart height normalization divide by total days or max values (`value / maxValue.toFloat()`).
+   - **Failure Mode**: On a fresh install with 0 transactions, `maxValue == 0` causes `Float.NaN` or `Float.POSITIVE_INFINITY`, causing Canvas draw crashes or layout calculation errors.
+   - **Fix**: Guard all chart scale normalizations with `if (maxValue <= 0L) 0f else (value.toFloat() / maxValue)`.
+3. **Paise Compact Formatting Boundaries**:
+   - **Bug**: Compact money formatting (`formatPaiseCompact`) with negative paise or very large numbers (crores) can produce awkward signs (e.g. `-₹1.2L` vs `₹-1.2L`).
+   - **Fix**: Normalize sign positioning and guarantee exact paise accuracy in all mathematical helpers.
 
 ---
 
-## 3. Key Product Decisions & Trade-Offs
-
-- **Decision 1: Unified Push-Into-Shadow Press Interaction on `Editorial3DLayerBox`**
-  - *Chosen Approach*: Build the press-in translation and shadow collapse directly into the shared 3D container and pill components (`Editorial3DLayerBox`, `WhitePillChip`, `WhitePillDropdown`, `RoundArrowButton`, `QuickAddFloatingPillButton`).
-  - *Why*: Every card, button, and chip across all 5 screens automatically gets the exact same chunky push-button feel and interruptible spring release without duplicating pointer logic.
-- **Decision 2: Session-Tracked First-Open Entrance Stagger**
-  - *Chosen Approach*: Track which tabs have played their initial entrance in memory so each tab animates its top 8 cards once when first visited, and stays instant on subsequent scrolls.
-  - *Why*: Satisfies the requirement that cards only animate on first open (never lagging or re-animating during normal scrolling).
-
----
-
-## 4. Technical Architecture & Data Strategy
+## 2. Remediation Strategy
 
 ```
-┌────────────────────────────────────────────────────────────────────────────┐
-│                     Centralized Motion System (Motion)                     │
-│  ┌──────────────────────────────────────────────────────────────────────┐  │
-│  │ LocalReducedMotion (reads Settings.Global.ANIMATOR_DURATION_SCALE)   │  │
-│  │ Durations: Quick=120ms | Normal=300ms | FastExit=180ms | Chart=600ms │  │
-│  │ Springs: PhysicalSpring (damping=0.58f, stiffness=320f)              │  │
-│  │          PressSpring    (damping=0.65f, stiffness=650f)              │  │
-│  └──────────────────┬───────────────────────────────────────────────────┘  │
-└─────────────────────┼──────────────────────────────────────────────────────┘
-                      │
-      ┌───────────────┼───────────────────────────────┬──────────────────────┐
-      ▼               ▼                               ▼                      ▼
-┌───────────┐  ┌─────────────────────────┐  ┌───────────────────┐  ┌─────────────────┐
-│ Navigation│  │ 3D Cards, Pills & Lists │  │ Charts & Counters │  │ AI Scan & Theme │
-├───────────┤  ├─────────────────────────┤  ├───────────────────┤  ├─────────────────┤
-│• 24dp Tab │  │• Push-into-shadow press │  │• 600ms Paise roll │  │• Shimmer + Scan │
-│  slide +  │  │  + light haptic tick    │  │  (tnum numerals)  │  │  line + 3-step  │
-│  fade     │  │• First-open 8-item      │  │• Area line draw   │  │  status cycle   │
-│• Sliding  │  │  stagger (50ms, 24dp)   │  │  then fill fade   │  │• Draft drop-in  │
-│  Aqua pill│  │• Sliding segmented pill │  │• 30ms bar stagger │  │  & error shake  │
-│  + spring │  │• New-tx highlight flash │  │  + tooltip pop    │  │• Sun/Moon spin  │
-│  label    │  │  & animateItem() glide  │  │• Sequential donut │  │  + 300ms theme  │
-└───────────┘  └─────────────────────────┘  └───────────────────┘  └─────────────────┘
+┌────────────────────────────────────────────────────────────────────────┐
+│                        Smoketest Fixes Pipeline                        │
+├────────────────────────────────┬───────────────────────────────────────┤
+│ 1. Data Layer Hardening        │ • RFC 4180 CSV quoted parser/formatter│
+│                                │ • Safe empty backup/restore guards    │
+├────────────────────────────────┼───────────────────────────────────────┤
+│ 2. Scanner & Media Resilience  │ • Immediate URI byte buffering in UI  │
+│                                │ • Camera permission & fallback checks │
+├────────────────────────────────┼───────────────────────────────────────┤
+│ 3. UI Boundary & Math Guards   │ • Category deck zero/single item check│
+│                                │ • Chart NaN/Infinity math guards      │
+├────────────────────────────────┼───────────────────────────────────────┤
+│ 4. Robolectric Test Suite      │ • Export/Import round-trip tests      │
+│                                │ • MoneyUtils & Math unit tests        │
+│                                │ • Deck boundary & zero-state tests    │
+└────────────────────────────────┴───────────────────────────────────────┘
 ```
 
-- **State & Interruption**: All transitions use `animateFloatAsState`, `animateDpAsState`, `animateIntOffsetAsState`, `animateColorAsState`, and `AnimatedContent` backed by springs or interruptible tweens—so any mid-animation tap, swipe, or scroll immediately retargets from the current velocity and position.
+---
+
+## 3. Implementation Steps
+
+### Step 1: Data Persistence & CSV Integrity (`DriveBackupAndExportManager.kt`)
+- Write an RFC 4180 CSV encoder that escapes quotes (`" -> ""`) and encloses fields in double quotes when containing commas or newlines.
+- Write a resilient stateful CSV line parser that respects quoted substrings with embedded commas.
+- Add safety checks to handle blank rows, corrupt headers, and zero-record files cleanly.
+
+### Step 2: Scanner & Intent Resilience (`MainActivity.kt` & `ReviewAndAddSheet.kt`)
+- Safeguard camera intent launch with package resolution and `runCatching` fallback to Photo Picker.
+- Buffer selected media stream synchronously into memory/cache to prevent Android URI permission expiration.
+- Provide smooth retry dialogs on transient Gemini 429/network errors.
+
+### Step 3: UI & Chart Math Boundary Protections
+- In `CategoriesFolderScreen.kt`: Guard against empty category lists with a friendly empty card and clamp swipe gestures when category count is 1.
+- In `ChartsAndInsightsScreen.kt` & `EditorialCharts.kt`: Guard `maxValue == 0L`, MoM percentage division, and average daily pacing against `0` denominators.
+- In `MoneyUtils.kt`: Ensure negative values, extreme amounts, and tabular formatting format cleanly with standard currency prefixes.
+
+### Step 4: Automated Robolectric Test Suite
+- Create `SmoketestResilienceTest.kt` in `app/src/test/java/com/example/snapspend/`:
+  - **Test 1: CSV Round-Trip**: Export transactions with complex merchant names (`"ACME, Inc."`), quotes (`"The \"Best\" Coffee"`), and newlines, then re-import and assert 100% data fidelity.
+  - **Test 2: Empty State & Zero Math**: Assert chart computations with 0 transactions yield 0 instead of NaN or crash.
+  - **Test 3: MoneyUtils Boundaries**: Test extreme values (`0`, `-1`, `-50000`, `100000000`) for paise conversion and display.
+  - **Test 4: Category Deck Index Wrapping**: Test deck index calculations for 0, 1, and 20 items.
+
+### Step 5: Verification & Quality Assurance
+- Run `gradle :app:testDebugUnitTest` via `run_command` to execute all existing and new Robolectric test cases.
+- Run `compile_applet` to confirm zero compilation errors.

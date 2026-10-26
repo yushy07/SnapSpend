@@ -406,7 +406,10 @@ class SnapSpendRepository(private val database: SnapSpendDatabase) {
         for (tx in dao.getAllTransactionsOnce()) {
             val dStr = dateFmt.format(Date(tx.timestamp))
             val tStr = if (tx.hasExplicitTime) timeFmt.format(Date(tx.timestamp)) else ""
-            val rupeesExact = String.format(Locale.US, "%d.%02d", tx.amountPaise / 100L, tx.amountPaise % 100L)
+            val isNeg = tx.amountPaise < 0L
+            val absPaise = kotlin.math.abs(tx.amountPaise)
+            val sign = if (isNeg) "-" else ""
+            val rupeesExact = String.format(Locale.US, "%s%d.%02d", sign, absPaise / 100L, absPaise % 100L)
             sb.append(csvEscape(dStr)).append(',')
             sb.append(csvEscape(tStr)).append(',')
             sb.append(csvEscape(tx.merchant)).append(',')
@@ -426,6 +429,166 @@ class SnapSpendRepository(private val database: SnapSpendDatabase) {
     private fun csvEscape(value: String): String {
         val escaped = value.replace("\"", "\"\"")
         return "\"$escaped\""
+    }
+
+    /**
+     * RFC 4180 compliant CSV parser supporting multi-line quoted fields, escaped quotes, and commas inside fields.
+     */
+    fun parseCsv(csvContent: String): List<List<String>> {
+        val rows = mutableListOf<List<String>>()
+        val currentRow = mutableListOf<String>()
+        val currentField = StringBuilder()
+        var insideQuotes = false
+        var i = 0
+        val len = csvContent.length
+
+        while (i < len) {
+            val c = csvContent[i]
+            when {
+                c == '"' -> {
+                    if (insideQuotes && i + 1 < len && csvContent[i + 1] == '"') {
+                        currentField.append('"')
+                        i++
+                    } else {
+                        insideQuotes = !insideQuotes
+                    }
+                }
+                c == ',' && !insideQuotes -> {
+                    currentRow.add(currentField.toString())
+                    currentField.clear()
+                }
+                (c == '\r' || c == '\n') && !insideQuotes -> {
+                    if (c == '\r' && i + 1 < len && csvContent[i + 1] == '\n') {
+                        i++
+                    }
+                    currentRow.add(currentField.toString())
+                    currentField.clear()
+                    if (currentRow.any { it.isNotBlank() }) {
+                        rows.add(currentRow.toList())
+                    }
+                    currentRow.clear()
+                }
+                else -> {
+                    currentField.append(c)
+                }
+            }
+            i++
+        }
+        if (currentField.isNotEmpty() || currentRow.isNotEmpty()) {
+            currentRow.add(currentField.toString())
+            if (currentRow.any { it.isNotBlank() }) {
+                rows.add(currentRow.toList())
+            }
+        }
+        return rows
+    }
+
+    /**
+     * Imports transactions from an RFC 4180 CSV export in Merge or Replace Everything mode.
+     */
+    suspend fun importTransactionsCsv(csvContent: String, replaceEverything: Boolean): ImportSummary {
+        val rows = parseCsv(csvContent)
+        if (rows.isEmpty()) {
+            return ImportSummary(0, 0, 0)
+        }
+        val dataRows = if (rows.first().firstOrNull()?.trim()?.equals("Date", ignoreCase = true) == true) {
+            rows.drop(1)
+        } else {
+            rows
+        }
+
+        val parsedTransactions = mutableListOf<TransactionEntity>()
+        for (cols in dataRows) {
+            if (cols.size < 4) continue
+            val dateStr = cols.getOrNull(0)?.trim()
+            val timeStr = cols.getOrNull(1)?.trim()
+            val (timestamp, hasExplicitTime) = MoneyUtils.parseDateAndTime(dateStr, timeStr)
+            val merchant = cols.getOrNull(2)?.trim()?.ifBlank { "Unknown" } ?: "Unknown"
+            val category = cols.getOrNull(3)?.trim()?.ifBlank { "Other" } ?: "Other"
+            val typeStr = cols.getOrNull(4)?.trim().orEmpty()
+            val type = runCatching { TransactionType.valueOf(typeStr.uppercase(Locale.US)) }.getOrDefault(TransactionType.EXPENSE)
+
+            val rupeesCol = cols.getOrNull(5)?.trim()
+            val paiseCol = cols.getOrNull(6)?.trim()?.toLongOrNull()
+            val amountPaise = when {
+                paiseCol != null -> paiseCol
+                !rupeesCol.isNullOrBlank() -> MoneyUtils.parseRupeesToPaise(rupeesCol) ?: 0L
+                else -> 0L
+            }
+
+            val statusStr = cols.getOrNull(7)?.trim().orEmpty()
+            val status = runCatching { TransactionStatus.valueOf(statusStr.uppercase(Locale.US)) }.getOrDefault(TransactionStatus.SUCCESS)
+            val paymentApp = cols.getOrNull(8)?.trim()?.ifBlank { "Unknown" } ?: "Unknown"
+            val refRaw = cols.getOrNull(9)?.trim()?.takeIf { it.isNotBlank() && !it.equals("unknown", ignoreCase = true) && it != "null" }
+            val sourceStr = cols.getOrNull(10)?.trim().orEmpty()
+            val source = runCatching { TransactionSource.valueOf(sourceStr.uppercase(Locale.US)) }.getOrDefault(TransactionSource.IMPORT)
+            val note = cols.getOrNull(11)?.trim().orEmpty()
+
+            val dupKey = MoneyUtils.buildDuplicateKey(refRaw, timestamp, hasExplicitTime, amountPaise, merchant)
+            parsedTransactions.add(
+                TransactionEntity(
+                    id = 0L,
+                    timestamp = timestamp,
+                    hasExplicitTime = hasExplicitTime,
+                    amountPaise = amountPaise,
+                    type = type,
+                    merchant = merchant,
+                    category = category,
+                    paymentApp = paymentApp,
+                    referenceNumber = refRaw,
+                    status = status,
+                    note = note,
+                    createdAt = System.currentTimeMillis(),
+                    source = source,
+                    duplicateKey = dupKey
+                )
+            )
+        }
+
+        var inserted = 0
+        var updatedPending = 0
+        var skipped = 0
+
+        database.withTransaction {
+            if (replaceEverything) {
+                dao.clearAllTransactions()
+                dao.insertTransactions(parsedTransactions)
+                inserted = parsedTransactions.size
+            } else {
+                val existingList = dao.getAllTransactionsOnce().toMutableList()
+                for (incoming in parsedTransactions) {
+                    val normRef = MoneyUtils.normalizeReference(incoming.referenceNumber)
+                    val matched = existingList.firstOrNull { ex ->
+                        val exRef = MoneyUtils.normalizeReference(ex.referenceNumber)
+                        if (normRef != null && exRef != null) {
+                            normRef == exRef
+                        } else {
+                            ex.duplicateKey == incoming.duplicateKey
+                        }
+                    }
+
+                    if (matched == null) {
+                        val newId = dao.insertTransaction(incoming)
+                        existingList.add(incoming.copy(id = newId))
+                        inserted++
+                    } else if (matched.status == TransactionStatus.PENDING && incoming.status != TransactionStatus.PENDING) {
+                        val upgraded = incoming.copy(id = matched.id)
+                        dao.updateTransaction(upgraded)
+                        existingList.remove(matched)
+                        existingList.add(upgraded)
+                        updatedPending++
+                    } else {
+                        skipped++
+                    }
+                }
+            }
+        }
+        refreshRepeatingPayments()
+        return ImportSummary(
+            insertedCount = inserted,
+            updatedPendingCount = updatedPending,
+            skippedDuplicateCount = skipped
+        )
     }
 
     /**

@@ -632,19 +632,16 @@ class GeminiReceiptExtractor(private val context: Context) {
 
     private fun decodeScaledBitmap(uri: Uri): Bitmap? {
         return try {
+            val bytes = context.contentResolver.openInputStream(uri)?.use { it.readBytes() } ?: return null
             val boundsOptions = BitmapFactory.Options().apply { inJustDecodeBounds = true }
-            context.contentResolver.openInputStream(uri)?.use {
-                BitmapFactory.decodeStream(it, null, boundsOptions)
-            }
+            BitmapFactory.decodeByteArray(bytes, 0, bytes.size, boundsOptions)
             val maxDim = 1600
             var sampleSize = 1
             while (boundsOptions.outWidth / sampleSize > maxDim || boundsOptions.outHeight / sampleSize > maxDim) {
                 sampleSize *= 2
             }
             val decodeOptions = BitmapFactory.Options().apply { inSampleSize = sampleSize }
-            context.contentResolver.openInputStream(uri)?.use {
-                BitmapFactory.decodeStream(it, null, decodeOptions)
-            }
+            BitmapFactory.decodeByteArray(bytes, 0, bytes.size, decodeOptions)
         } catch (e: Exception) {
             Log.e(TAG, "Failed to decode image URI: $uri", e)
             null

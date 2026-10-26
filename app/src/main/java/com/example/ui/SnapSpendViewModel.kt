@@ -925,15 +925,21 @@ class SnapSpendViewModel(application: Application) : AndroidViewModel(applicatio
     fun importJsonFromUri(uri: Uri, replaceEverything: Boolean) {
         viewModelScope.launch(Dispatchers.IO) {
             try {
-                val json = appContext.contentResolver.openInputStream(uri)?.use { input ->
+                val content = appContext.contentResolver.openInputStream(uri)?.use { input ->
                     input.bufferedReader(Charsets.UTF_8).readText()
                 } ?: throw IllegalStateException("Could not read selected file.")
 
-                val summary = repository.importFromBackupJson(json, replaceEverything = replaceEverything)
+                val trimmed = content.trimStart()
+                val isJson = trimmed.startsWith("{")
+                val summary = if (isJson) {
+                    repository.importFromBackupJson(content, replaceEverything = replaceEverything)
+                } else {
+                    repository.importTransactionsCsv(content, replaceEverything = replaceEverything)
+                }
                 val modeText = if (replaceEverything) "Replaced all data" else "Merged backup"
                 _toastMessage.value = "$modeText: ${summary.insertedCount} added, ${summary.updatedPendingCount} updated, ${summary.skippedDuplicateCount} duplicates skipped."
             } catch (e: Exception) {
-                _toastMessage.value = "Import failed: Make sure you selected a valid SnapSpend JSON backup."
+                _toastMessage.value = "Import failed: Make sure you selected a valid SnapSpend JSON or CSV backup."
             }
         }
     }

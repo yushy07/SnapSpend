@@ -66,22 +66,40 @@ object MoneyUtils {
     }
 
     /**
-     * Converts paise (Long) to an editable plain text string (e.g. 15050L -> "150.50", 2000L -> "20").
+     * Converts paise (Long) to an editable plain text string (e.g. 15050L -> "150.50", 2000L -> "20", -5000L -> "-50").
      */
     fun paiseToEditableRupeeString(paise: Long): String {
         if (paise == 0L) return ""
+        val isNegative = paise < 0L
         val absPaise = abs(paise)
         val rupees = absPaise / 100L
         val rem = absPaise % 100L
+        val sign = if (isNegative) "-" else ""
         return if (rem == 0L) {
-            rupees.toString()
+            "$sign$rupees"
         } else {
-            String.format(Locale.US, "%d.%02d", rupees, rem)
+            String.format(Locale.US, "%s%d.%02d", sign, rupees, rem)
         }
     }
 
     /**
-     * Parses a user-entered or OCR-extracted Rupee string (e.g. "150.50", "₹1,250", "20")
+     * Compact Indian currency formatter for charts and chips (e.g. 15000000L -> "₹1.5L", 2500000L -> "₹25k").
+     */
+    fun formatPaiseCompact(paise: Long, currencySymbol: String = "₹"): String {
+        val isNegative = paise < 0L
+        val absPaise = abs(paise)
+        val rupees = absPaise / 100L
+        val sign = if (isNegative) "-" else ""
+        return when {
+            rupees >= 10_000_000L -> String.format(Locale.US, "%s%s%.1fCr", sign, currencySymbol, rupees / 10_000_000.0)
+            rupees >= 100_000L -> String.format(Locale.US, "%s%s%.1fL", sign, currencySymbol, rupees / 100_000.0)
+            rupees >= 1_000L -> String.format(Locale.US, "%s%s%.1fk", sign, currencySymbol, rupees / 1_000.0)
+            else -> formatPaise(paise, currencySymbol)
+        }
+    }
+
+    /**
+     * Parses a user-entered or OCR-extracted Rupee string (e.g. "150.50", "₹1,250", "-20")
      * deterministically into whole paise (Long) using BigDecimal (never Double).
      */
     fun parseRupeesToPaise(rawInput: String): Long? {
@@ -96,7 +114,6 @@ object MoneyUtils {
         if (cleaned.isEmpty()) return null
         return try {
             val bd = BigDecimal(cleaned)
-            if (bd < BigDecimal.ZERO) return null
             bd.movePointRight(2).setScale(0, RoundingMode.HALF_UP).longValueExact()
         } catch (e: Exception) {
             null

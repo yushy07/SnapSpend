@@ -516,26 +516,67 @@ fun CategoriesFolderScreen(
             // 3. Swipeable 3D Stacked Category Deck + Counter Pill underneath
             item(key = "stacked_folder_tabs") {
                 Box(modifier = Modifier.staggeredScreenEntrance(screenKey = "categories", index = 2)) {
-                    SwipeableCategoryFolderDeck(
-                        categories = activeDeckCategories,
-                        selectedIndex = safeSelectedIndex,
-                        programmaticStepRequest = programmaticStepRequest,
-                        programmaticTargetIndex = programmaticTargetIndex,
-                        hasAtLeastTwoMonthsOfData = hasAtLeastTwoMonthsOfData,
-                        onSelectIndex = { newIndex ->
-                            selectedIndex = newIndex
-                        },
-                        onEditBudgetClick = { catName, currentLimitPaise ->
-                            budgetCategoryTarget = catName
-                            budgetInputText = if (currentLimitPaise != null && currentLimitPaise > 0L) {
-                                (currentLimitPaise / 100L).toString()
-                            } else {
-                                ""
+                    if (activeDeckCategories.isEmpty()) {
+                        Editorial3DLayerBox(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .padding(vertical = 16.dp),
+                            shape = RoundedCornerShape(28.dp),
+                            extrusionColor = InkBlack,
+                            extrusionBorderColor = InkBlack,
+                            depthX = 4.dp,
+                            depthY = 6.dp
+                        ) {
+                            Surface(
+                                modifier = Modifier.fillMaxWidth(),
+                                shape = RoundedCornerShape(28.dp),
+                                color = SunnyYellow,
+                                contentColor = InkBlack,
+                                border = BorderStroke(1.8.dp, InkBlack)
+                            ) {
+                                Column(
+                                    modifier = Modifier
+                                        .fillMaxWidth()
+                                        .padding(28.dp),
+                                    horizontalAlignment = Alignment.CenterHorizontally,
+                                    verticalArrangement = Arrangement.spacedBy(10.dp)
+                                ) {
+                                    Text(
+                                        text = "NO CATEGORIES YET",
+                                        style = CondensedCardTitleStyle.copy(fontSize = 22.sp),
+                                        color = InkBlack
+                                    )
+                                    Text(
+                                        text = "Switch between Expenses and Earnings or add new payments to start tracking.",
+                                        style = MaterialTheme.typography.bodyMedium.copy(fontWeight = FontWeight.Medium),
+                                        color = InkBlack.copy(alpha = 0.85f),
+                                        textAlign = androidx.compose.ui.text.style.TextAlign.Center
+                                    )
+                                }
                             }
-                            showBudgetDialog = true
-                        },
-                        onTransactionClick = onTransactionClick
-                    )
+                        }
+                    } else {
+                        SwipeableCategoryFolderDeck(
+                            categories = activeDeckCategories,
+                            selectedIndex = safeSelectedIndex,
+                            programmaticStepRequest = programmaticStepRequest,
+                            programmaticTargetIndex = programmaticTargetIndex,
+                            hasAtLeastTwoMonthsOfData = hasAtLeastTwoMonthsOfData,
+                            onSelectIndex = { newIndex ->
+                                selectedIndex = newIndex
+                            },
+                            onEditBudgetClick = { catName, currentLimitPaise ->
+                                budgetCategoryTarget = catName
+                                budgetInputText = if (currentLimitPaise != null && currentLimitPaise > 0L) {
+                                    (currentLimitPaise / 100L).toString()
+                                } else {
+                                    ""
+                                }
+                                showBudgetDialog = true
+                            },
+                            onTransactionClick = onTransactionClick
+                        )
+                    }
                 }
             }
         }
