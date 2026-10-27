@@ -2,7 +2,6 @@ package com.example.ui.screens
 
 import androidx.activity.compose.BackHandler
 import androidx.compose.animation.AnimatedVisibility
-import androidx.compose.animation.animateColorAsState
 import androidx.compose.animation.core.FastOutSlowInEasing
 import androidx.compose.animation.core.LinearEasing
 import androidx.compose.animation.core.RepeatMode
@@ -28,6 +27,7 @@ import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.WindowInsets
+import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
@@ -48,12 +48,10 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowForward
 import androidx.compose.material.icons.filled.Check
 import androidx.compose.material.icons.filled.CloudDone
-import androidx.compose.material.icons.filled.Key
-import androidx.compose.material.icons.filled.LocalGasStation
 import androidx.compose.material.icons.filled.Lock
 import androidx.compose.material.icons.filled.Mic
-import androidx.compose.material.icons.filled.PhoneAndroid
 import androidx.compose.material.icons.filled.PhotoCamera
+import androidx.compose.material.icons.filled.PieChart
 import androidx.compose.material.icons.filled.ReceiptLong
 import androidx.compose.material.icons.filled.Restaurant
 import androidx.compose.material.icons.filled.Shield
@@ -82,9 +80,6 @@ import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.platform.LocalView
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.semantics.Role
-import androidx.compose.ui.semantics.contentDescription
-import androidx.compose.ui.semantics.role
-import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
@@ -98,27 +93,26 @@ import com.example.ui.theme.InkBlack
 import com.example.ui.theme.LocalReducedMotion
 import com.example.ui.theme.Motion
 import com.example.ui.theme.PaleLavenderTint
-import com.example.ui.theme.PalePinkTint
-import com.example.ui.theme.PaleYellowTint
-import com.example.ui.theme.PeriwinkleIndigo
 import com.example.ui.theme.PureWhite
 import com.example.ui.theme.SunnyYellow
 import kotlinx.coroutines.launch
 import kotlin.math.absoluteValue
 import kotlin.math.sin
 
-private val SlideBackgrounds = listOf(
-    PeriwinkleIndigo, // Slide 1
-    SunnyYellow,      // Slide 2
-    EditorialCoral,   // Slide 3
-    EditorialAqua,    // Slide 4
-    EditorialMint     // Slide 5
-)
+/**
+ * Signature Electric Cobalt Blue background from the reference design.
+ */
+private val OnboardingElectricBlue = Color(0xFF3858F8)
 
 /**
- * Highly interactive, tactile 3D first-launch onboarding carousel with floating rupee bills,
- * 3D minted coins, ambient particles, authentic Indian payment app badges (GPay, PhonePe, Paytm, CRED),
- * and touch/drag reactive 3D physical tilt.
+ * High-octane, tactile 3D pop-art first-launch onboarding carousel matching the reference design:
+ * - Electric Cobalt Blue background
+ * - Top bar with "X / 5" and 3D white "SKIP" pill
+ * - Huge bold white headline with yellow comic ray sparkles & curved yellow underline
+ * - Chunky white 3D card with floating Indian payment badges (GPay, PhonePe, Paytm, CRED),
+ *   rupee banknotes, 3D minted coins, cute smiling mascot characters, and comic action tick marks
+ * - Interactive 3D touch/drag tilt + continuous organic floating bobbing
+ * - Bottom bar with morphing yellow/black dot indicators and 3D Sunny Yellow "NEXT →" button
  */
 @Composable
 fun OnboardingCarouselScreen(
@@ -130,7 +124,6 @@ fun OnboardingCarouselScreen(
     val reducedMotion = LocalReducedMotion.current
     val view = LocalView.current
 
-    // Back handling: go to previous slide, or exit/finish if on first slide
     BackHandler {
         if (pagerState.currentPage > 0) {
             coroutineScope.launch {
@@ -141,25 +134,14 @@ fun OnboardingCarouselScreen(
         }
     }
 
-    // Dynamic background color interpolated based on current page
-    val currentBgColor = SlideBackgrounds[pagerState.currentPage.coerceIn(0, 4)]
-    val animatedBgColor by animateColorAsState(
-        targetValue = currentBgColor,
-        animationSpec = Motion.normalTween(reducedMotion),
-        label = "onboarding_bg_color"
-    )
-
     Box(
         modifier = modifier
             .fillMaxSize()
-            .background(animatedBgColor)
+            .background(OnboardingElectricBlue)
             .testTag("onboarding_carousel_screen")
     ) {
-        // Ambient background drifting particles across the entire screen
-        AmbientFloatingParticles(
-            page = pagerState.currentPage,
-            reducedMotion = reducedMotion
-        )
+        // Ambient background drifting particles
+        AmbientFloatingParticles(reducedMotion = reducedMotion)
 
         Column(
             modifier = Modifier
@@ -167,21 +149,22 @@ fun OnboardingCarouselScreen(
                 .windowInsetsPadding(WindowInsets.statusBars)
                 .windowInsetsPadding(WindowInsets.navigationBars)
         ) {
-            // Top Bar: Step Counter & Skip Pill
+            // Top Bar: Step Counter (Left) & 3D Skip Pill (Right)
             Row(
                 modifier = Modifier
                     .fillMaxWidth()
-                    .padding(horizontal = 24.dp, vertical = 14.dp),
+                    .padding(horizontal = 24.dp, vertical = 12.dp),
                 horizontalArrangement = Arrangement.SpaceBetween,
                 verticalAlignment = Alignment.CenterVertically
             ) {
-                val isIndigo = pagerState.currentPage == 0
-                val textColor = if (isIndigo) PureWhite else InkBlack
-
                 Text(
                     text = "${pagerState.currentPage + 1} / 5",
-                    style = CondensedCardTitleStyle.copy(fontSize = 15.sp, letterSpacing = 1.sp),
-                    color = textColor,
+                    style = CondensedCardTitleStyle.copy(
+                        fontSize = 18.sp,
+                        fontWeight = FontWeight.Black,
+                        letterSpacing = 1.sp
+                    ),
+                    color = PureWhite,
                     modifier = Modifier.testTag("onboarding_step_counter")
                 )
 
@@ -215,15 +198,15 @@ fun OnboardingCarouselScreen(
                 )
             }
 
-            // Bottom Bar: Dots Indicator & Next / Let's Go Button
+            // Bottom Bar: Morphing Indicators (Left) & 3D Yellow Action Button (Right)
             Row(
                 modifier = Modifier
                     .fillMaxWidth()
-                    .padding(horizontal = 24.dp, vertical = 20.dp),
+                    .padding(horizontal = 24.dp, vertical = 16.dp),
                 horizontalArrangement = Arrangement.SpaceBetween,
                 verticalAlignment = Alignment.CenterVertically
             ) {
-                // Morphing 3D Dots
+                // Morphing Dots: Active page is a Sunny Yellow pill; inactive pages are Black dots
                 Row(
                     horizontalArrangement = Arrangement.spacedBy(8.dp),
                     verticalAlignment = Alignment.CenterVertically
@@ -240,16 +223,16 @@ fun OnboardingCarouselScreen(
                                 .height(10.dp)
                                 .width(dotWidth)
                                 .clip(CircleShape)
-                                .background(InkBlack)
-                                .border(1.dp, InkBlack, CircleShape)
+                                .background(if (isSelected) SunnyYellow else InkBlack)
+                                .border(1.2.dp, InkBlack, CircleShape)
                         )
                     }
                 }
 
-                // Next / Let's Go Button
+                // Next / Get Started Action Button
                 val isLastSlide = pagerState.currentPage == 4
                 OnboardingActionButton(
-                    label = if (isLastSlide) "LET'S GO" else "NEXT",
+                    label = if (isLastSlide) "GET STARTED" else "NEXT",
                     onClick = {
                         Motion.performLightTapHaptic(view)
                         if (isLastSlide) {
@@ -266,69 +249,169 @@ fun OnboardingCarouselScreen(
     }
 }
 
-// --- AMBIENT PARTICLES & SPARKLES CANVAS ---
+// --- TOP SKIP PILL (3D WHITE BUTTON) ---
 @Composable
-private fun AmbientFloatingParticles(
-    page: Int,
-    reducedMotion: Boolean
+private fun OnboardingSkipPill(
+    onClick: () -> Unit,
+    modifier: Modifier = Modifier
 ) {
+    val interactionSource = remember { MutableInteractionSource() }
+    val isPressed by interactionSource.collectIsPressedAsState()
+    val pillShape = RoundedCornerShape(20.dp)
+
+    Editorial3DLayerBox(
+        modifier = modifier
+            .testTag("onboarding_skip_button")
+            .offset(
+                x = if (isPressed) 1.5.dp else 0.dp,
+                y = if (isPressed) 2.5.dp else 0.dp
+            )
+            .clickable(
+                interactionSource = interactionSource,
+                indication = null,
+                role = Role.Button,
+                onClick = onClick
+            ),
+        shape = pillShape,
+        depthX = 2.dp,
+        depthY = if (isPressed) 1.dp else 3.5.dp,
+        extrusionColor = InkBlack,
+        extrusionBorderColor = InkBlack
+    ) {
+        Surface(
+            modifier = Modifier
+                .width(82.dp)
+                .height(40.dp),
+            shape = pillShape,
+            color = PureWhite,
+            border = BorderStroke(2.dp, InkBlack)
+        ) {
+            Box(
+                modifier = Modifier.fillMaxSize(),
+                contentAlignment = Alignment.Center
+            ) {
+                Text(
+                    text = "SKIP",
+                    style = CondensedCardTitleStyle.copy(
+                        fontSize = 14.sp,
+                        fontWeight = FontWeight.Black,
+                        letterSpacing = 1.sp
+                    ),
+                    color = InkBlack
+                )
+            }
+        }
+    }
+}
+
+// --- BOTTOM ACTION BUTTON (3D YELLOW PILL WITH ARROW) ---
+@Composable
+private fun OnboardingActionButton(
+    label: String,
+    onClick: () -> Unit,
+    modifier: Modifier = Modifier
+) {
+    val interactionSource = remember { MutableInteractionSource() }
+    val isPressed by interactionSource.collectIsPressedAsState()
+    val pillShape = RoundedCornerShape(26.dp)
+
+    Editorial3DLayerBox(
+        modifier = modifier
+            .testTag("onboarding_action_button")
+            .offset(
+                x = if (isPressed) 2.dp else 0.dp,
+                y = if (isPressed) 3.dp else 0.dp
+            )
+            .clickable(
+                interactionSource = interactionSource,
+                indication = null,
+                role = Role.Button,
+                onClick = onClick
+            ),
+        shape = pillShape,
+        depthX = 2.5.dp,
+        depthY = if (isPressed) 1.5.dp else 4.5.dp,
+        extrusionColor = InkBlack,
+        extrusionBorderColor = InkBlack
+    ) {
+        Surface(
+            modifier = Modifier
+                .height(52.dp)
+                .padding(horizontal = 2.dp),
+            shape = pillShape,
+            color = SunnyYellow,
+            border = BorderStroke(2.5.dp, InkBlack)
+        ) {
+            Row(
+                modifier = Modifier
+                    .padding(horizontal = 22.dp)
+                    .fillMaxHeight(),
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.Center
+            ) {
+                Text(
+                    text = label,
+                    style = CondensedCardTitleStyle.copy(
+                        fontSize = 17.sp,
+                        fontWeight = FontWeight.Black,
+                        letterSpacing = 0.5.sp
+                    ),
+                    color = InkBlack
+                )
+                Spacer(modifier = Modifier.width(8.dp))
+                Icon(
+                    imageVector = Icons.AutoMirrored.Filled.ArrowForward,
+                    contentDescription = null,
+                    tint = InkBlack,
+                    modifier = Modifier.size(20.dp)
+                )
+            }
+        }
+    }
+}
+
+// --- AMBIENT PARTICLES CANVAS ---
+@Composable
+private fun AmbientFloatingParticles(reducedMotion: Boolean) {
     if (reducedMotion) return
 
-    val infiniteTransition = rememberInfiniteTransition(label = "particles_drift")
+    val infiniteTransition = rememberInfiniteTransition(label = "ambient_particles")
     val driftPhase by infiniteTransition.animateFloat(
         initialValue = 0f,
         targetValue = 6.28318f,
         animationSpec = infiniteRepeatable(
-            animation = tween(6500, easing = LinearEasing),
+            animation = tween(7000, easing = LinearEasing),
             repeatMode = RepeatMode.Restart
         ),
-        label = "drift_phase"
+        label = "ambient_drift"
     )
-
-    val particleColor = when (page) {
-        0 -> PureWhite.copy(alpha = 0.35f)
-        1 -> InkBlack.copy(alpha = 0.18f)
-        2 -> PureWhite.copy(alpha = 0.32f)
-        3 -> InkBlack.copy(alpha = 0.20f)
-        else -> PureWhite.copy(alpha = 0.40f)
-    }
-
-    val goldAccent = SunnyYellow.copy(alpha = 0.45f)
 
     Canvas(modifier = Modifier.fillMaxSize()) {
         val w = size.width
         val h = size.height
 
         val particlePositions = listOf(
-            Offset(w * 0.12f, h * 0.18f) to 6.dp.toPx(),
-            Offset(w * 0.88f, h * 0.22f) to 9.dp.toPx(),
-            Offset(w * 0.08f, h * 0.65f) to 8.dp.toPx(),
-            Offset(w * 0.90f, h * 0.60f) to 7.dp.toPx(),
-            Offset(w * 0.50f, h * 0.10f) to 5.dp.toPx(),
-            Offset(w * 0.20f, h * 0.82f) to 6.dp.toPx(),
-            Offset(w * 0.82f, h * 0.80f) to 8.dp.toPx()
+            Offset(w * 0.10f, h * 0.16f) to 7.dp.toPx(),
+            Offset(w * 0.90f, h * 0.20f) to 8.dp.toPx(),
+            Offset(w * 0.06f, h * 0.70f) to 9.dp.toPx(),
+            Offset(w * 0.92f, h * 0.65f) to 8.dp.toPx(),
+            Offset(w * 0.50f, h * 0.08f) to 6.dp.toPx(),
+            Offset(w * 0.18f, h * 0.88f) to 7.dp.toPx(),
+            Offset(w * 0.84f, h * 0.86f) to 8.dp.toPx()
         )
 
         particlePositions.forEachIndexed { i, (pos, rad) ->
             val offsetMultiplier = (i + 1) * 0.85f
-            val floatY = sin(driftPhase + offsetMultiplier) * 14.dp.toPx()
+            val floatY = sin(driftPhase + offsetMultiplier) * 12.dp.toPx()
             val floatX = sin(driftPhase * 0.7f + offsetMultiplier) * 8.dp.toPx()
             val center = Offset(pos.x + floatX, pos.y + floatY)
 
             if (i % 2 == 0) {
-                // 4-point golden starburst
-                drawStar(
-                    center = center,
-                    radius = rad * 1.5f,
-                    color = goldAccent
-                )
+                // Golden 4-point star
+                drawStar(center = center, radius = rad * 1.4f, color = SunnyYellow.copy(alpha = 0.55f))
             } else {
-                // Soft sparkling bokeh circle with border
-                drawCircle(
-                    color = particleColor,
-                    radius = rad,
-                    center = center
-                )
+                // Soft white sparkle
+                drawCircle(color = PureWhite.copy(alpha = 0.35f), radius = rad, center = center)
             }
         }
     }
@@ -348,6 +431,98 @@ private fun androidx.compose.ui.graphics.drawscope.DrawScope.drawStar(
         close()
     }
     drawPath(path = path, color = color)
+}
+
+// --- COMIC ACCENTS: ACTION TICKS & SPARKLE RAYS ---
+
+/**
+ * 3 comic radiating tick marks (black whiskers) placed near corners & floating objects.
+ */
+@Composable
+private fun ComicActionTicks(
+    angleDegrees: Float = 0f,
+    modifier: Modifier = Modifier
+) {
+    Canvas(modifier = modifier.graphicsLayer { rotationZ = angleDegrees }) {
+        val strokeW = 3.2.dp.toPx()
+        val color = InkBlack
+
+        drawLine(
+            color = color,
+            start = Offset(size.width * 0.5f, size.height * 0.85f),
+            end = Offset(size.width * 0.15f, size.height * 0.25f),
+            strokeWidth = strokeW,
+            cap = StrokeCap.Round
+        )
+        drawLine(
+            color = color,
+            start = Offset(size.width * 0.5f, size.height * 0.85f),
+            end = Offset(size.width * 0.5f, size.height * 0.10f),
+            strokeWidth = strokeW,
+            cap = StrokeCap.Round
+        )
+        drawLine(
+            color = color,
+            start = Offset(size.width * 0.5f, size.height * 0.85f),
+            end = Offset(size.width * 0.85f, size.height * 0.25f),
+            strokeWidth = strokeW,
+            cap = StrokeCap.Round
+        )
+    }
+}
+
+/**
+ * 3 yellow radiating sparkle rays that shoot above mascots and headlines.
+ */
+@Composable
+private fun ComicYellowRays(modifier: Modifier = Modifier) {
+    Canvas(modifier = modifier) {
+        val strokeW = 3.8.dp.toPx()
+        val color = SunnyYellow
+
+        drawLine(
+            color = color,
+            start = Offset(size.width * 0.22f, size.height * 0.90f),
+            end = Offset(size.width * 0.05f, size.height * 0.20f),
+            strokeWidth = strokeW,
+            cap = StrokeCap.Round
+        )
+        drawLine(
+            color = color,
+            start = Offset(size.width * 0.50f, size.height * 0.85f),
+            end = Offset(size.width * 0.50f, size.height * 0.05f),
+            strokeWidth = strokeW,
+            cap = StrokeCap.Round
+        )
+        drawLine(
+            color = color,
+            start = Offset(size.width * 0.78f, size.height * 0.90f),
+            end = Offset(size.width * 0.95f, size.height * 0.20f),
+            strokeWidth = strokeW,
+            cap = StrokeCap.Round
+        )
+    }
+}
+
+/**
+ * Hand-drawn yellow curved accent underline flourish under the subtitle.
+ */
+@Composable
+private fun CurvedYellowUnderline(modifier: Modifier = Modifier) {
+    Canvas(modifier = modifier) {
+        val path = Path().apply {
+            moveTo(0f, size.height * 0.75f)
+            quadraticTo(
+                size.width * 0.5f, size.height * 0.15f,
+                size.width, size.height * 0.60f
+            )
+        }
+        drawPath(
+            path = path,
+            color = SunnyYellow,
+            style = Stroke(width = 4.2.dp.toPx(), cap = StrokeCap.Round)
+        )
+    }
 }
 
 // --- INTERACTIVE 3D TILT CONTAINER ---
@@ -402,12 +577,12 @@ private fun Interactive3DTiltCard(
     }
 }
 
-// --- FLOATING 3D RUPEE BANKNOTE COMPONENT ---
+// --- FLOATING 3D RUPEE BANKNOTE ---
 @Composable
 private fun FloatingRupeeBill(
     denomination: String,
     primaryColor: Color,
-    accentColor: Color,
+    watermarkColor: Color,
     modifier: Modifier = Modifier,
     tiltAngle: Float = 0f,
     bobOffset: Float = 0f
@@ -417,77 +592,54 @@ private fun FloatingRupeeBill(
             rotationZ = tiltAngle
             translationY = bobOffset
         },
-        shape = RoundedCornerShape(10.dp),
-        depthX = 3.dp,
+        shape = RoundedCornerShape(12.dp),
+        depthX = 2.5.dp,
         depthY = 4.dp,
         extrusionColor = InkBlack,
         extrusionBorderColor = InkBlack
     ) {
         Surface(
             modifier = Modifier
-                .width(115.dp)
-                .height(62.dp),
-            shape = RoundedCornerShape(10.dp),
+                .width(105.dp)
+                .height(52.dp),
+            shape = RoundedCornerShape(12.dp),
             color = primaryColor,
-            border = BorderStroke(1.8.dp, InkBlack)
+            border = BorderStroke(2.dp, InkBlack)
         ) {
-            Box(
+            Row(
                 modifier = Modifier
                     .fillMaxSize()
-                    .padding(5.dp)
+                    .padding(horizontal = 8.dp),
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.SpaceBetween
             ) {
-                // Outer inner border representing guilloche
                 Box(
                     modifier = Modifier
-                        .fillMaxSize()
-                        .border(1.dp, accentColor.copy(alpha = 0.5f), RoundedCornerShape(6.dp))
-                )
-
-                // Watermark circle
-                Box(
-                    modifier = Modifier
-                        .size(24.dp)
+                        .size(22.dp)
                         .clip(CircleShape)
-                        .background(accentColor.copy(alpha = 0.35f))
-                        .align(Alignment.CenterStart)
-                        .offset(x = 6.dp)
+                        .background(watermarkColor)
                 )
-
-                // Rupee symbol and denomination
-                Column(
-                    modifier = Modifier
-                        .align(Alignment.CenterEnd)
-                        .padding(end = 6.dp),
-                    horizontalAlignment = Alignment.End
-                ) {
-                    Text(
-                        text = "₹$denomination",
-                        style = CondensedCardTitleStyle.copy(
-                            fontSize = 17.sp,
-                            fontWeight = FontWeight.Black,
-                            letterSpacing = 0.5.sp
-                        ),
-                        color = InkBlack
-                    )
-                    Text(
-                        text = "RESERVE BANK",
-                        style = MaterialTheme.typography.labelSmall.copy(
-                            fontSize = 6.sp,
-                            fontWeight = FontWeight.Bold
-                        ),
-                        color = InkBlack.copy(alpha = 0.7f)
-                    )
-                }
+                Text(
+                    text = "₹$denomination",
+                    style = CondensedCardTitleStyle.copy(
+                        fontSize = 18.sp,
+                        fontWeight = FontWeight.Black,
+                        letterSpacing = (-0.5).sp
+                    ),
+                    color = InkBlack
+                )
             }
         }
     }
 }
 
-// --- FLOATING 3D GOLD COIN COMPONENT ---
+// --- FLOATING 3D RUPEE COIN ---
 @Composable
-private fun FloatingCoin3D(
+private fun FloatingCoinComic(
+    symbolColor: Color,
+    coinColor: Color,
     modifier: Modifier = Modifier,
-    sizeDp: Int = 38,
+    sizeDp: Int = 48,
     wobbleOffset: Float = 0f,
     wobbleRotation: Float = 0f
 ) {
@@ -498,43 +650,37 @@ private fun FloatingCoin3D(
         },
         shape = CircleShape,
         depthX = 2.5.dp,
-        depthY = 3.5.dp,
-        extrusionColor = Color(0xFF996515),
+        depthY = 4.dp,
+        extrusionColor = InkBlack,
         extrusionBorderColor = InkBlack
     ) {
         Surface(
             modifier = Modifier.size(sizeDp.dp),
             shape = CircleShape,
-            color = SunnyYellow,
-            border = BorderStroke(2.dp, InkBlack)
+            color = coinColor,
+            border = BorderStroke(2.2.dp, InkBlack)
         ) {
             Box(
                 modifier = Modifier.fillMaxSize(),
                 contentAlignment = Alignment.Center
             ) {
-                // Coin inner rim
-                Box(
-                    modifier = Modifier
-                        .size((sizeDp - 8).dp)
-                        .clip(CircleShape)
-                        .border(1.2.dp, Color(0xFFD4AF37), CircleShape)
-                )
                 Text(
                     text = "₹",
                     style = CondensedCardTitleStyle.copy(
-                        fontSize = (sizeDp * 0.48f).sp,
+                        fontSize = (sizeDp * 0.52f).sp,
                         fontWeight = FontWeight.Black
                     ),
-                    color = InkBlack
+                    color = symbolColor
                 )
             }
         }
     }
 }
 
-// --- AUTHENTIC UPI APP BADGES ---
+// --- AUTHENTIC FLOATING PAYMENT APP BADGES ---
+
 @Composable
-private fun FloatingGPayBadge(
+private fun FloatingGPayPillBadge(
     modifier: Modifier = Modifier,
     bobOffset: Float = 0f
 ) {
@@ -543,19 +689,19 @@ private fun FloatingGPayBadge(
             translationY = bobOffset
             rotationZ = -6f
         },
-        shape = RoundedCornerShape(14.dp),
-        depthX = 3.dp,
-        depthY = 4.dp,
+        shape = RoundedCornerShape(20.dp),
+        depthX = 2.5.dp,
+        depthY = 3.5.dp,
         extrusionColor = InkBlack,
         extrusionBorderColor = InkBlack
     ) {
         Surface(
             modifier = Modifier
-                .width(96.dp)
-                .height(38.dp),
-            shape = RoundedCornerShape(14.dp),
+                .width(102.dp)
+                .height(42.dp),
+            shape = RoundedCornerShape(20.dp),
             color = PureWhite,
-            border = BorderStroke(1.8.dp, InkBlack)
+            border = BorderStroke(2.dp, InkBlack)
         ) {
             Row(
                 modifier = Modifier
@@ -564,46 +710,17 @@ private fun FloatingGPayBadge(
                 verticalAlignment = Alignment.CenterVertically,
                 horizontalArrangement = Arrangement.Center
             ) {
-                // 4-color Google GPay Pill Icon
                 Canvas(modifier = Modifier.size(20.dp)) {
                     val strokeW = 3.5.dp.toPx()
-                    // Blue arc
-                    drawArc(
-                        color = Color(0xFF4285F4),
-                        startAngle = 180f,
-                        sweepAngle = 90f,
-                        useCenter = false,
-                        style = Stroke(width = strokeW, cap = StrokeCap.Round)
-                    )
-                    // Red arc
-                    drawArc(
-                        color = Color(0xFFEA4335),
-                        startAngle = 270f,
-                        sweepAngle = 90f,
-                        useCenter = false,
-                        style = Stroke(width = strokeW, cap = StrokeCap.Round)
-                    )
-                    // Yellow arc
-                    drawArc(
-                        color = Color(0xFFFBBC05),
-                        startAngle = 0f,
-                        sweepAngle = 90f,
-                        useCenter = false,
-                        style = Stroke(width = strokeW, cap = StrokeCap.Round)
-                    )
-                    // Green arc
-                    drawArc(
-                        color = Color(0xFF34A853),
-                        startAngle = 90f,
-                        sweepAngle = 90f,
-                        useCenter = false,
-                        style = Stroke(width = strokeW, cap = StrokeCap.Round)
-                    )
+                    drawArc(Color(0xFF4285F4), 180f, 90f, false, style = Stroke(strokeW, cap = StrokeCap.Round))
+                    drawArc(Color(0xFFEA4335), 270f, 90f, false, style = Stroke(strokeW, cap = StrokeCap.Round))
+                    drawArc(Color(0xFFFBBC05), 0f, 90f, false, style = Stroke(strokeW, cap = StrokeCap.Round))
+                    drawArc(Color(0xFF34A853), 90f, 90f, false, style = Stroke(strokeW, cap = StrokeCap.Round))
                 }
                 Spacer(modifier = Modifier.width(6.dp))
                 Text(
                     text = "GPay",
-                    style = CondensedCardTitleStyle.copy(fontSize = 15.sp, fontWeight = FontWeight.Black),
+                    style = CondensedCardTitleStyle.copy(fontSize = 16.sp, fontWeight = FontWeight.Black),
                     color = InkBlack
                 )
             }
@@ -612,68 +729,67 @@ private fun FloatingGPayBadge(
 }
 
 @Composable
-private fun FloatingPhonePeBadge(
+private fun FloatingPhonePePillBadge(
     modifier: Modifier = Modifier,
     bobOffset: Float = 0f
 ) {
-    val phonePePurple = Color(0xFF5F259F)
     Editorial3DLayerBox(
         modifier = modifier.graphicsLayer {
             translationY = bobOffset
-            rotationZ = 8f
+            rotationZ = -5f
         },
-        shape = CircleShape,
-        depthX = 3.dp,
-        depthY = 4.dp,
+        shape = RoundedCornerShape(20.dp),
+        depthX = 2.5.dp,
+        depthY = 3.5.dp,
         extrusionColor = InkBlack,
         extrusionBorderColor = InkBlack
     ) {
         Surface(
-            modifier = Modifier.size(44.dp),
-            shape = CircleShape,
-            color = phonePePurple,
-            border = BorderStroke(1.8.dp, InkBlack)
+            modifier = Modifier
+                .width(115.dp)
+                .height(42.dp),
+            shape = RoundedCornerShape(20.dp),
+            color = Color(0xFF5F259F),
+            border = BorderStroke(2.dp, InkBlack)
         ) {
-            Box(
-                modifier = Modifier.fillMaxSize(),
-                contentAlignment = Alignment.Center
+            Row(
+                modifier = Modifier
+                    .fillMaxSize()
+                    .padding(horizontal = 8.dp),
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.Center
             ) {
-                Text(
-                    text = "पे",
-                    style = CondensedCardTitleStyle.copy(
-                        fontSize = 24.sp,
-                        fontWeight = FontWeight.Black
-                    ),
-                    color = PureWhite
-                )
+                Text("पे", style = CondensedCardTitleStyle.copy(fontSize = 20.sp, fontWeight = FontWeight.Black), color = PureWhite)
+                Spacer(modifier = Modifier.width(6.dp))
+                Text("PhonePe", style = CondensedCardTitleStyle.copy(fontSize = 15.sp, fontWeight = FontWeight.Black), color = PureWhite)
             }
         }
     }
 }
 
 @Composable
-private fun FloatingPaytmBadge(
+private fun FloatingPaytmPillBadge(
     modifier: Modifier = Modifier,
     bobOffset: Float = 0f
 ) {
     Editorial3DLayerBox(
         modifier = modifier.graphicsLayer {
             translationY = bobOffset
-            rotationZ = -7f
+            rotationZ = 6f
         },
-        shape = RoundedCornerShape(12.dp),
-        depthX = 3.dp,
-        depthY = 4.dp,
+        shape = RoundedCornerShape(20.dp),
+        depthX = 2.5.dp,
+        depthY = 3.5.dp,
         extrusionColor = InkBlack,
         extrusionBorderColor = InkBlack
     ) {
         Surface(
             modifier = Modifier
-                .width(88.dp)
-                .height(36.dp),
-            shape = RoundedCornerShape(12.dp),
+                .width(105.dp)
+                .height(42.dp),
+            shape = RoundedCornerShape(20.dp),
             color = PureWhite,
-            border = BorderStroke(1.8.dp, InkBlack)
+            border = BorderStroke(2.dp, InkBlack)
         ) {
             Row(
                 modifier = Modifier
@@ -684,64 +800,51 @@ private fun FloatingPaytmBadge(
             ) {
                 Box(
                     modifier = Modifier
-                        .size(14.dp)
+                        .size(16.dp)
                         .clip(CircleShape)
                         .background(Color(0xFF00BAF2)),
                     contentAlignment = Alignment.Center
                 ) {
-                    Icon(
-                        imageVector = Icons.Default.Check,
-                        contentDescription = null,
-                        tint = PureWhite,
-                        modifier = Modifier.size(10.dp)
-                    )
+                    Icon(Icons.Default.Check, contentDescription = null, tint = PureWhite, modifier = Modifier.size(12.dp))
                 }
-                Spacer(modifier = Modifier.width(5.dp))
-                Text(
-                    text = "Paytm",
-                    style = CondensedCardTitleStyle.copy(
-                        fontSize = 14.sp,
-                        fontWeight = FontWeight.Black
-                    ),
-                    color = Color(0xFF002E6E)
-                )
+                Spacer(modifier = Modifier.width(6.dp))
+                Text("Paytm", style = CondensedCardTitleStyle.copy(fontSize = 15.sp, fontWeight = FontWeight.Black), color = Color(0xFF002E6E))
             }
         }
     }
 }
 
 @Composable
-private fun FloatingCredBadge(
+private fun FloatingCredPillBadge(
     modifier: Modifier = Modifier,
     bobOffset: Float = 0f
 ) {
     Editorial3DLayerBox(
         modifier = modifier.graphicsLayer {
             translationY = bobOffset
-            rotationZ = 6f
+            rotationZ = -6f
         },
-        shape = RoundedCornerShape(12.dp),
-        depthX = 3.dp,
-        depthY = 4.dp,
-        extrusionColor = Color(0xFF1E1E28),
+        shape = RoundedCornerShape(20.dp),
+        depthX = 2.5.dp,
+        depthY = 3.5.dp,
+        extrusionColor = InkBlack,
         extrusionBorderColor = InkBlack
     ) {
         Surface(
             modifier = Modifier
-                .width(92.dp)
-                .height(38.dp),
-            shape = RoundedCornerShape(12.dp),
-            color = Color(0xFF121218),
-            border = BorderStroke(1.8.dp, Color(0xFFD4AF37))
+                .width(105.dp)
+                .height(42.dp),
+            shape = RoundedCornerShape(20.dp),
+            color = Color(0xFF14141E),
+            border = BorderStroke(2.dp, Color(0xFFD4AF37))
         ) {
             Row(
                 modifier = Modifier
                     .fillMaxSize()
-                    .padding(horizontal = 8.dp),
+                    .padding(horizontal = 10.dp),
                 verticalAlignment = Alignment.CenterVertically,
-                horizontalArrangement = Arrangement.SpaceBetween
+                horizontalArrangement = Arrangement.Center
             ) {
-                // Gold Smart Chip
                 Box(
                     modifier = Modifier
                         .width(14.dp)
@@ -749,15 +852,97 @@ private fun FloatingCredBadge(
                         .clip(RoundedCornerShape(2.dp))
                         .background(Color(0xFFD4AF37))
                 )
-                Text(
-                    text = "CRED",
-                    style = CondensedCardTitleStyle.copy(
-                        fontSize = 13.sp,
-                        fontWeight = FontWeight.Black,
-                        letterSpacing = 1.sp
-                    ),
-                    color = PureWhite
-                )
+                Spacer(modifier = Modifier.width(6.dp))
+                Text("CRED", style = CondensedCardTitleStyle.copy(fontSize = 15.sp, fontWeight = FontWeight.Black, letterSpacing = 1.sp), color = PureWhite)
+            }
+        }
+    }
+}
+
+// --- SMILING MASCOT CHARACTERS ---
+
+/**
+ * The yellow smiling mascot with 4 corner viewfinder brackets from the user reference image.
+ */
+@Composable
+private fun SmilingScannerMascot(
+    modifier: Modifier = Modifier,
+    mode: Int = 0 // 0: Scanner brackets, 1: Camera lens, 2: Shield, 3: Chart, 4: Safe lock
+) {
+    Box(
+        modifier = modifier,
+        contentAlignment = Alignment.Center
+    ) {
+        // Radiating yellow sparkle rays above mascot
+        ComicYellowRays(
+            modifier = Modifier
+                .size(46.dp, 28.dp)
+                .align(Alignment.TopCenter)
+                .offset(y = (-24).dp)
+        )
+
+        Editorial3DLayerBox(
+            modifier = Modifier.size(86.dp),
+            shape = RoundedCornerShape(22.dp),
+            depthX = 3.dp,
+            depthY = 4.5.dp,
+            extrusionColor = InkBlack,
+            extrusionBorderColor = InkBlack
+        ) {
+            Surface(
+                modifier = Modifier.fillMaxSize(),
+                shape = RoundedCornerShape(22.dp),
+                color = SunnyYellow,
+                border = BorderStroke(2.5.dp, InkBlack)
+            ) {
+                Canvas(modifier = Modifier.fillMaxSize().padding(11.dp)) {
+                    val w = size.width
+                    val h = size.height
+                    val bracketLen = 14.dp.toPx()
+                    val strokeW = 4.dp.toPx()
+
+                    when (mode) {
+                        0 -> {
+                            // 4 Corner Viewfinder Brackets
+                            drawLine(InkBlack, Offset(0f, 0f), Offset(bracketLen, 0f), strokeW, StrokeCap.Round)
+                            drawLine(InkBlack, Offset(0f, 0f), Offset(0f, bracketLen), strokeW, StrokeCap.Round)
+
+                            drawLine(InkBlack, Offset(w, 0f), Offset(w - bracketLen, 0f), strokeW, StrokeCap.Round)
+                            drawLine(InkBlack, Offset(w, 0f), Offset(w, bracketLen), strokeW, StrokeCap.Round)
+
+                            drawLine(InkBlack, Offset(0f, h), Offset(bracketLen, h), strokeW, StrokeCap.Round)
+                            drawLine(InkBlack, Offset(0f, h), Offset(0f, h - bracketLen), strokeW, StrokeCap.Round)
+
+                            drawLine(InkBlack, Offset(w, h), Offset(w - bracketLen, h), strokeW, StrokeCap.Round)
+                            drawLine(InkBlack, Offset(w, h), Offset(w, h - bracketLen), strokeW, StrokeCap.Round)
+                        }
+                        1 -> {
+                            // Camera flash circle on top-right
+                            drawCircle(InkBlack, 3.5.dp.toPx(), Offset(w * 0.82f, h * 0.18f))
+                        }
+                        else -> {
+                            // Subtle corner anchors
+                            drawCircle(InkBlack, 2.5.dp.toPx(), Offset(4.dp.toPx(), 4.dp.toPx()))
+                            drawCircle(InkBlack, 2.5.dp.toPx(), Offset(w - 4.dp.toPx(), 4.dp.toPx()))
+                        }
+                    }
+
+                    // Two black dot eyes
+                    val eyeRadius = 4.5.dp.toPx()
+                    drawCircle(InkBlack, eyeRadius, Offset(w * 0.35f, h * 0.44f))
+                    drawCircle(InkBlack, eyeRadius, Offset(w * 0.65f, h * 0.44f))
+
+                    // Cute curved smile
+                    val smilePath = Path().apply {
+                        moveTo(w * 0.36f, h * 0.60f)
+                        quadraticTo(w * 0.50f, h * 0.76f, w * 0.64f, h * 0.60f)
+                    }
+                    drawPath(
+                        path = smilePath,
+                        color = InkBlack,
+                        style = Stroke(width = 3.6.dp.toPx(), cap = StrokeCap.Round)
+                    )
+                }
             }
         }
     }
@@ -771,20 +956,16 @@ private fun OnboardingSlideContent(
     reducedMotion: Boolean,
     modifier: Modifier = Modifier
 ) {
-    val isIndigo = page == 0
-    val titleColor = if (isIndigo) PureWhite else InkBlack
-    val textColor = if (isIndigo) PureWhite.copy(alpha = 0.92f) else InkBlack.copy(alpha = 0.88f)
-
-    val (title, bodyText) = when (page) {
-        0 -> "SNAP IT. SORT IT." to "SnapSpend reads your payment screenshots and sorts every rupee into the right category."
-        1 -> "ADD IN SECONDS" to "Tap + ADD. Scan with the camera, pick screenshots or a PDF, say a quick note, or type it in yourself."
-        2 -> "YOU STAY IN CONTROL" to "The AI reads it, you check it, then you confirm. Fix a category once and SnapSpend remembers it. Duplicates are skipped."
-        3 -> "SEE WHERE IT GOES" to "Charts, month-by-month comparisons, budgets and repeating payments. Swipe the category cards to explore."
-        else -> "YOUR MONEY, YOUR PHONE" to "Your payments are saved on this phone. Only what you scan or type for the AI is sent to Gemini to be read. Export a backup file any time from Settings."
+    val (titleLines, bodyText) = when (page) {
+        0 -> listOf("SNAP IT.,", "SORT IT.") to "SnapSpend reads your payment screenshots and sorts every rupee into the right category."
+        1 -> listOf("ADD IN,", "SECONDS.") to "Tap + ADD. Scan with the camera, pick screenshots or a PDF, say a quick note, or type it in yourself."
+        2 -> listOf("YOU STAY IN,", "CONTROL.") to "The AI reads it, you check it, then confirm. Fix a category once and SnapSpend remembers it forever."
+        3 -> listOf("SEE WHERE,", "IT GOES.") to "Charts, month-by-month comparisons, budgets, and repeating payments at a single glance."
+        else -> listOf("YOUR MONEY,,", "YOUR PHONE.") to "Your finances live strictly on your phone. Private on-device database with zero ads and encrypted backups."
     }
 
     val parallaxTranslationX = if (reducedMotion) 0f else (pageOffset * 65f)
-    val cardRotationZ = if (reducedMotion) 0f else (pageOffset * -4f).coerceIn(-6f, 6f)
+    val cardRotationZ = if (reducedMotion) 0f else (pageOffset * -3.5f).coerceIn(-6f, 6f)
     val scale = if (reducedMotion) 1f else (1f - (pageOffset.absoluteValue * 0.08f)).coerceIn(0.90f, 1f)
 
     Column(
@@ -792,38 +973,72 @@ private fun OnboardingSlideContent(
             .fillMaxSize()
             .verticalScroll(rememberScrollState())
             .padding(horizontal = 24.dp),
-        horizontalAlignment = Alignment.CenterHorizontally,
+        horizontalAlignment = Alignment.Start,
         verticalArrangement = Arrangement.SpaceBetween
     ) {
-        // Text Header Area
+        // Hero Header Area with Yellow Sparkles & Curved Flourish
         Column(
             modifier = Modifier
                 .fillMaxWidth()
-                .padding(top = 10.dp),
+                .padding(top = 8.dp),
             horizontalAlignment = Alignment.Start
         ) {
-            Text(
-                text = title,
-                style = CondensedCardTitleStyle.copy(fontSize = 38.sp, lineHeight = 42.sp),
-                color = titleColor,
-                modifier = Modifier.testTag("slide_title_$page")
-            )
-            Spacer(modifier = Modifier.height(10.dp))
+            Row(
+                verticalAlignment = Alignment.Bottom
+            ) {
+                Column {
+                    titleLines.forEach { line ->
+                        Text(
+                            text = line,
+                            style = CondensedCardTitleStyle.copy(
+                                fontSize = 42.sp,
+                                lineHeight = 44.sp,
+                                fontWeight = FontWeight.Black,
+                                letterSpacing = (-0.5).sp
+                            ),
+                            color = PureWhite,
+                            modifier = Modifier.testTag("slide_title_$page")
+                        )
+                    }
+                }
+                Spacer(modifier = Modifier.width(6.dp))
+                // 3 Yellow rays beside headline
+                ComicYellowRays(
+                    modifier = Modifier
+                        .size(38.dp, 32.dp)
+                        .offset(y = (-8).dp)
+                )
+            }
+
+            Spacer(modifier = Modifier.height(12.dp))
+
             Text(
                 text = bodyText,
-                style = MaterialTheme.typography.bodyLarge.copy(fontSize = 16.sp, lineHeight = 23.sp),
-                color = textColor,
+                style = MaterialTheme.typography.bodyLarge.copy(
+                    fontSize = 16.sp,
+                    lineHeight = 23.sp,
+                    color = PureWhite.copy(alpha = 0.95f)
+                ),
                 modifier = Modifier.testTag("slide_text_$page")
+            )
+
+            Spacer(modifier = Modifier.height(10.dp))
+
+            // Hand-drawn yellow underline flourish
+            CurvedYellowUnderline(
+                modifier = Modifier
+                    .width(110.dp)
+                    .height(12.dp)
             )
         }
 
-        Spacer(modifier = Modifier.height(18.dp))
+        Spacer(modifier = Modifier.height(20.dp))
 
         // Center Chunky 3D Illustration Scene with Interactive Tilt
         Interactive3DTiltCard(
             modifier = Modifier
                 .fillMaxWidth()
-                .padding(bottom = 14.dp)
+                .padding(bottom = 12.dp)
                 .graphicsLayer {
                     translationX = parallaxTranslationX
                     this.rotationZ = cardRotationZ
@@ -833,23 +1048,25 @@ private fun OnboardingSlideContent(
             reducedMotion = reducedMotion
         ) {
             when (page) {
-                0 -> Slide1RobotIllustration(reducedMotion = reducedMotion)
-                1 -> Slide2AddMiniMock(reducedMotion = reducedMotion)
-                2 -> Slide3ReviewMiniMock(reducedMotion = reducedMotion)
-                3 -> Slide4ChartsMiniMock(reducedMotion = reducedMotion)
-                else -> Slide5PrivacyMiniMock(reducedMotion = reducedMotion)
+                0 -> Slide1SnapScene(reducedMotion = reducedMotion)
+                1 -> Slide2AddScene(reducedMotion = reducedMotion)
+                2 -> Slide3ControlScene(reducedMotion = reducedMotion)
+                3 -> Slide4InsightsScene(reducedMotion = reducedMotion)
+                else -> Slide5PrivacyScene(reducedMotion = reducedMotion)
             }
         }
     }
 }
 
-// --- SLIDE 1 MINI MOCK: Robot Mascot + Floating ₹500 Bill + GPay + PhonePe + Coins ---
+// ============================================================================
+// SLIDE 1: SNAP IT. SORT IT. (FAITHFUL TO USER REFERENCE IMAGE)
+// ============================================================================
 @Composable
-private fun Slide1RobotIllustration(reducedMotion: Boolean) {
+private fun Slide1SnapScene(reducedMotion: Boolean) {
     val infiniteTransition = rememberInfiniteTransition(label = "slide1_anims")
     val bob1 by infiniteTransition.animateFloat(
-        initialValue = -6f,
-        targetValue = 6f,
+        initialValue = -5f,
+        targetValue = 5f,
         animationSpec = infiniteRepeatable(
             animation = tween(1900, easing = FastOutSlowInEasing),
             repeatMode = RepeatMode.Reverse
@@ -857,8 +1074,8 @@ private fun Slide1RobotIllustration(reducedMotion: Boolean) {
         label = "bob1"
     )
     val bob2 by infiniteTransition.animateFloat(
-        initialValue = 5f,
-        targetValue = -5f,
+        initialValue = 4f,
+        targetValue = -4f,
         animationSpec = infiniteRepeatable(
             animation = tween(2200, easing = FastOutSlowInEasing),
             repeatMode = RepeatMode.Reverse
@@ -869,94 +1086,118 @@ private fun Slide1RobotIllustration(reducedMotion: Boolean) {
     Box(
         modifier = Modifier
             .fillMaxWidth()
-            .height(310.dp),
+            .height(350.dp),
         contentAlignment = Alignment.Center
     ) {
-        // Main Chunky 3D Base Card
+        // Main Chunky White Card with -2° tilt
         Editorial3DLayerBox(
             modifier = Modifier
-                .fillMaxWidth()
-                .height(290.dp),
-            shape = RoundedCornerShape(28.dp),
-            extrusionColor = InkBlack,
-            extrusionBorderColor = InkBlack,
+                .fillMaxWidth(0.96f)
+                .height(280.dp)
+                .graphicsLayer { rotationZ = -2f },
+            shape = RoundedCornerShape(26.dp),
             depthX = 4.dp,
-            depthY = 6.dp
+            depthY = 6.dp,
+            extrusionColor = InkBlack,
+            extrusionBorderColor = InkBlack
         ) {
             Surface(
                 modifier = Modifier
                     .fillMaxSize()
                     .testTag("slide1_mock_card"),
-                shape = RoundedCornerShape(28.dp),
+                shape = RoundedCornerShape(26.dp),
                 color = PureWhite,
-                border = BorderStroke(2.dp, InkBlack)
+                border = BorderStroke(2.5.dp, InkBlack)
             ) {
                 Box(
-                    modifier = Modifier.fillMaxSize(),
+                    modifier = Modifier
+                        .fillMaxSize()
+                        .padding(top = 40.dp, start = 14.dp, end = 14.dp, bottom = 14.dp),
                     contentAlignment = Alignment.Center
                 ) {
-                    Column(
-                        modifier = Modifier.graphicsLayer {
-                            translationY = if (reducedMotion) 0f else bob1
-                        },
-                        horizontalAlignment = Alignment.CenterHorizontally,
-                        verticalArrangement = Arrangement.spacedBy(14.dp)
+                    // Inner Soft Lavender UPI Receipt
+                    Surface(
+                        modifier = Modifier.fillMaxWidth(),
+                        shape = RoundedCornerShape(18.dp),
+                        color = Color(0xFFF1EEFC),
+                        border = BorderStroke(1.5.dp, Color(0xFFE2DCF7))
                     ) {
-                        // Friendly 3D Robot Mascot Head
-                        Surface(
-                            modifier = Modifier.size(96.dp),
-                            shape = RoundedCornerShape(24.dp),
-                            color = SunnyYellow,
-                            border = BorderStroke(2.2.dp, InkBlack)
-                        ) {
-                            Column(
-                                modifier = Modifier.fillMaxSize(),
-                                horizontalAlignment = Alignment.CenterHorizontally,
-                                verticalArrangement = Arrangement.Center
-                            ) {
-                                // Antenna pill on top
-                                Box(
-                                    modifier = Modifier
-                                        .size(10.dp)
-                                        .clip(CircleShape)
-                                        .background(EditorialCoral)
-                                        .border(1.2.dp, InkBlack, CircleShape)
-                                )
-                                Spacer(modifier = Modifier.height(4.dp))
-                                Row(horizontalArrangement = Arrangement.spacedBy(18.dp)) {
-                                    Box(modifier = Modifier.size(15.dp).clip(CircleShape).background(InkBlack))
-                                    Box(modifier = Modifier.size(15.dp).clip(CircleShape).background(InkBlack))
-                                }
-                                Spacer(modifier = Modifier.height(8.dp))
-                                Box(
-                                    modifier = Modifier
-                                        .width(38.dp)
-                                        .height(7.dp)
-                                        .clip(RoundedCornerShape(3.5.dp))
-                                        .background(InkBlack)
-                                )
-                            }
-                        }
-
-                        // Floating Receipt Card in Mascot's Hands
-                        Surface(
-                            modifier = Modifier
-                                .width(210.dp)
-                                .padding(horizontal = 10.dp, vertical = 6.dp),
-                            shape = RoundedCornerShape(14.dp),
-                            color = PaleLavenderTint,
-                            border = BorderStroke(1.8.dp, InkBlack)
-                        ) {
+                        Column(modifier = Modifier.padding(14.dp)) {
+                            // Top Row: Swiggy Instamart + UPI Timestamp
                             Row(
-                                modifier = Modifier.padding(10.dp),
-                                verticalAlignment = Alignment.CenterVertically,
-                                horizontalArrangement = Arrangement.SpaceBetween
+                                modifier = Modifier.fillMaxWidth(),
+                                horizontalArrangement = Arrangement.SpaceBetween,
+                                verticalAlignment = Alignment.CenterVertically
+                            ) {
+                                Row(verticalAlignment = Alignment.CenterVertically) {
+                                    Box(
+                                        modifier = Modifier
+                                            .size(40.dp)
+                                            .clip(RoundedCornerShape(12.dp))
+                                            .background(Color(0xFFFF5200)),
+                                        contentAlignment = Alignment.Center
+                                    ) {
+                                        Text("S", color = PureWhite, fontWeight = FontWeight.Black, fontSize = 22.sp)
+                                    }
+                                    Spacer(modifier = Modifier.width(10.dp))
+                                    Column {
+                                        Text(
+                                            text = "SWIGGY INSTAMART",
+                                            style = CondensedCardTitleStyle.copy(fontSize = 14.sp, fontWeight = FontWeight.Black),
+                                            color = InkBlack
+                                        )
+                                        Text(
+                                            text = "UPI Screenshot • 10:42 AM",
+                                            style = MaterialTheme.typography.labelSmall.copy(fontSize = 11.sp),
+                                            color = InkBlack.copy(alpha = 0.65f)
+                                        )
+                                    }
+                                }
+
+                                // UPI Flag Arrow
+                                Canvas(modifier = Modifier.size(18.dp)) {
+                                    val path = Path().apply {
+                                        moveTo(0f, 0f)
+                                        lineTo(size.width, size.height * 0.5f)
+                                        lineTo(0f, size.height)
+                                        close()
+                                    }
+                                    drawPath(path, Color(0xFF0F8A5F))
+                                }
+                            }
+
+                            Spacer(modifier = Modifier.height(14.dp))
+                            Box(modifier = Modifier.fillMaxWidth().height(1.dp).background(Color(0xFFE2DCF7)))
+                            Spacer(modifier = Modifier.height(12.dp))
+
+                            // Bottom Row: Amount & Category
+                            Row(
+                                modifier = Modifier.fillMaxWidth(),
+                                horizontalArrangement = Arrangement.SpaceBetween,
+                                verticalAlignment = Alignment.CenterVertically
                             ) {
                                 Column {
-                                    Text("SWIGGY INSTAMART", style = CondensedCardTitleStyle.copy(fontSize = 13.sp), color = InkBlack)
-                                    Text("UPI Screenshot · 10:42 AM", style = MaterialTheme.typography.labelSmall, color = InkBlack.copy(alpha = 0.7f))
+                                    Text("Amount", style = MaterialTheme.typography.labelSmall.copy(fontSize = 11.sp), color = InkBlack.copy(alpha = 0.6f))
+                                    Text("₹420", style = CondensedCardTitleStyle.copy(fontSize = 26.sp, fontWeight = FontWeight.Black), color = InkBlack)
                                 }
-                                Text("₹420", style = CondensedCardTitleStyle.copy(fontSize = 17.sp), color = InkBlack)
+                                Box(modifier = Modifier.width(1.dp).height(32.dp).background(Color(0xFFE2DCF7)))
+                                Column {
+                                    Text("Category", style = MaterialTheme.typography.labelSmall.copy(fontSize = 11.sp), color = InkBlack.copy(alpha = 0.6f))
+                                    Surface(
+                                        shape = RoundedCornerShape(12.dp),
+                                        color = Color(0xFFDDD5FB),
+                                        border = BorderStroke(1.dp, Color(0xFFCABEF7))
+                                    ) {
+                                        Row(
+                                            modifier = Modifier.padding(horizontal = 10.dp, vertical = 5.dp),
+                                            verticalAlignment = Alignment.CenterVertically
+                                        ) {
+                                            Icon(Icons.Default.ShoppingBag, contentDescription = null, tint = Color(0xFF5B3DE8), modifier = Modifier.size(14.dp))
+                                            Spacer(modifier = Modifier.width(5.dp))
+                                            Text("Groceries", style = CondensedCardTitleStyle.copy(fontSize = 13.sp, fontWeight = FontWeight.Black), color = Color(0xFF5B3DE8))
+                                        }
+                                    }
+                                }
                             }
                         }
                     }
@@ -964,49 +1205,105 @@ private fun Slide1RobotIllustration(reducedMotion: Boolean) {
             }
         }
 
-        // Floating ₹500 Rupee Banknote (Top Right)
-        FloatingRupeeBill(
-            denomination = "500",
-            primaryColor = Color(0xFF4A9086),
-            accentColor = Color(0xFF2E655D),
-            tiltAngle = 12f,
-            bobOffset = if (reducedMotion) 0f else bob2,
+        // Mascot sitting atop the main card
+        SmilingScannerMascot(
+            mode = 0,
             modifier = Modifier
-                .align(Alignment.TopEnd)
-                .offset(x = 12.dp, y = (-12).dp)
+                .align(Alignment.TopCenter)
+                .offset(y = (-14).dp)
         )
 
-        // Floating Google Pay Badge (Top Left)
-        FloatingGPayBadge(
-            bobOffset = if (reducedMotion) 0f else -bob1,
+        // Top Left: Floating GPay Pill Badge
+        Box(
             modifier = Modifier
                 .align(Alignment.TopStart)
-                .offset(x = (-8).dp, y = (-6).dp)
-        )
+                .offset(x = 6.dp, y = 20.dp)
+        ) {
+            FloatingGPayPillBadge(
+                bobOffset = if (reducedMotion) 0f else -bob1
+            )
+            ComicActionTicks(
+                angleDegrees = 135f,
+                modifier = Modifier
+                    .size(24.dp)
+                    .align(Alignment.TopStart)
+                    .offset(x = (-16).dp, y = (-12).dp)
+            )
+        }
 
-        // Floating PhonePe Badge (Bottom Left)
-        FloatingPhonePeBadge(
-            bobOffset = if (reducedMotion) 0f else bob2,
+        // Top Right: Floating ₹500 Rupee Bill
+        Box(
+            modifier = Modifier
+                .align(Alignment.TopEnd)
+                .offset(x = (-4).dp, y = 24.dp)
+        ) {
+            FloatingRupeeBill(
+                denomination = "500",
+                primaryColor = Color(0xFF6EC68E),
+                watermarkColor = Color(0xFF4FA870),
+                tiltAngle = 10f,
+                bobOffset = if (reducedMotion) 0f else bob2
+            )
+            ComicActionTicks(
+                angleDegrees = 45f,
+                modifier = Modifier
+                    .size(24.dp)
+                    .align(Alignment.TopEnd)
+                    .offset(x = 16.dp, y = (-12).dp)
+            )
+        }
+
+        // Bottom Left: Floating Purple Rupee Coin
+        Box(
             modifier = Modifier
                 .align(Alignment.BottomStart)
-                .offset(x = (-10).dp, y = 10.dp)
-        )
+                .offset(x = 10.dp, y = (-8).dp)
+        ) {
+            FloatingCoinComic(
+                symbolColor = PureWhite,
+                coinColor = Color(0xFF7C5CFC),
+                sizeDp = 52,
+                wobbleOffset = if (reducedMotion) 0f else bob1,
+                wobbleRotation = -8f
+            )
+            ComicActionTicks(
+                angleDegrees = 225f,
+                modifier = Modifier
+                    .size(24.dp)
+                    .align(Alignment.BottomStart)
+                    .offset(x = (-16).dp, y = 14.dp)
+            )
+        }
 
-        // Floating 3D Gold Coin (Bottom Right)
-        FloatingCoin3D(
-            sizeDp = 40,
-            wobbleOffset = if (reducedMotion) 0f else bob1,
-            wobbleRotation = 10f,
+        // Bottom Right: Floating Gold Rupee Coin
+        Box(
             modifier = Modifier
                 .align(Alignment.BottomEnd)
-                .offset(x = 10.dp, y = 12.dp)
-        )
+                .offset(x = (-10).dp, y = (-4).dp)
+        ) {
+            FloatingCoinComic(
+                symbolColor = InkBlack,
+                coinColor = SunnyYellow,
+                sizeDp = 50,
+                wobbleOffset = if (reducedMotion) 0f else -bob2,
+                wobbleRotation = 12f
+            )
+            ComicActionTicks(
+                angleDegrees = 315f,
+                modifier = Modifier
+                    .size(24.dp)
+                    .align(Alignment.BottomEnd)
+                    .offset(x = 16.dp, y = 14.dp)
+            )
+        }
     }
 }
 
-// --- SLIDE 2 MINI MOCK: "+ ADD" Pill + Stacked Cards + Paytm + ₹200 Bill + Coins ---
+// ============================================================================
+// SLIDE 2: ADD IN SECONDS (CAMERA + SCREENSHOTS + VOICE + PDF)
+// ============================================================================
 @Composable
-private fun Slide2AddMiniMock(reducedMotion: Boolean) {
+private fun Slide2AddScene(reducedMotion: Boolean) {
     val infiniteTransition = rememberInfiniteTransition(label = "slide2_anims")
     val bob by infiniteTransition.animateFloat(
         initialValue = -5f,
@@ -1021,138 +1318,183 @@ private fun Slide2AddMiniMock(reducedMotion: Boolean) {
     Box(
         modifier = Modifier
             .fillMaxWidth()
-            .height(310.dp),
+            .height(350.dp),
         contentAlignment = Alignment.Center
     ) {
         Editorial3DLayerBox(
             modifier = Modifier
-                .fillMaxWidth()
-                .height(290.dp),
-            shape = RoundedCornerShape(28.dp),
-            extrusionColor = InkBlack,
-            extrusionBorderColor = InkBlack,
+                .fillMaxWidth(0.96f)
+                .height(280.dp)
+                .graphicsLayer { rotationZ = 1.5f },
+            shape = RoundedCornerShape(26.dp),
             depthX = 4.dp,
-            depthY = 6.dp
+            depthY = 6.dp,
+            extrusionColor = InkBlack,
+            extrusionBorderColor = InkBlack
         ) {
             Surface(
                 modifier = Modifier
                     .fillMaxSize()
                     .testTag("slide2_mock_card"),
-                shape = RoundedCornerShape(28.dp),
+                shape = RoundedCornerShape(26.dp),
                 color = PureWhite,
-                border = BorderStroke(2.dp, InkBlack)
+                border = BorderStroke(2.5.dp, InkBlack)
             ) {
-                Column(
+                Box(
                     modifier = Modifier
                         .fillMaxSize()
-                        .padding(20.dp),
-                    horizontalAlignment = Alignment.CenterHorizontally,
-                    verticalArrangement = Arrangement.Center
+                        .padding(top = 40.dp, start = 14.dp, end = 14.dp, bottom = 14.dp),
+                    contentAlignment = Alignment.Center
                 ) {
-                    // Header 3D Mini Pill "+ ADD"
-                    Surface(
-                        shape = CircleShape,
-                        color = SunnyYellow,
-                        border = BorderStroke(2.dp, InkBlack)
-                    ) {
-                        Text(
-                            text = "+ ADD PAYMENT",
-                            style = CondensedCardTitleStyle.copy(fontSize = 15.sp),
-                            color = InkBlack,
-                            modifier = Modifier.padding(horizontal = 20.dp, vertical = 7.dp)
-                        )
-                    }
-
-                    Spacer(modifier = Modifier.height(14.dp))
-
-                    // Stacked 3D Colored Action Options
                     Column(
-                        modifier = Modifier.fillMaxWidth(0.92f),
+                        modifier = Modifier.fillMaxWidth(),
                         verticalArrangement = Arrangement.spacedBy(8.dp)
                     ) {
-                        MiniMockOptionStrip(title = "QUICK SCAN CAMERA", color = PaleYellowTint, icon = Icons.Default.PhotoCamera)
-                        MiniMockOptionStrip(title = "PICK SCREENSHOTS", color = EditorialAqua, icon = Icons.Default.ReceiptLong)
-                        MiniMockOptionStrip(title = "SPEAK A NOTE", color = PaleLavenderTint, icon = Icons.Default.Mic)
-                        MiniMockOptionStrip(title = "UPLOAD BANK PDF", color = PalePinkTint, icon = Icons.Default.UploadFile)
+                        Slide2OptionPill(title = "CAMERA SCAN", icon = Icons.Default.PhotoCamera, color = EditorialAqua)
+                        Slide2OptionPill(title = "PICK SCREENSHOTS", icon = Icons.Default.ReceiptLong, color = SunnyYellow)
+                        Slide2OptionPill(title = "VOICE NOTE", icon = Icons.Default.Mic, color = PaleLavenderTint)
+                        Slide2OptionPill(title = "BANK PDF STATEMENT", icon = Icons.Default.UploadFile, color = EditorialMint)
                     }
                 }
             }
         }
 
-        // Floating ₹200 Banknote (Top Right)
-        FloatingRupeeBill(
-            denomination = "200",
-            primaryColor = Color(0xFFF38A3E),
-            accentColor = Color(0xFFB55816),
-            tiltAngle = -10f,
-            bobOffset = if (reducedMotion) 0f else bob,
+        // Mascot (Camera mode)
+        SmilingScannerMascot(
+            mode = 1,
             modifier = Modifier
-                .align(Alignment.TopEnd)
-                .offset(x = 14.dp, y = (-10).dp)
+                .align(Alignment.TopCenter)
+                .offset(y = (-14).dp)
         )
 
-        // Floating Paytm Badge (Bottom Right)
-        FloatingPaytmBadge(
-            bobOffset = if (reducedMotion) 0f else -bob,
-            modifier = Modifier
-                .align(Alignment.BottomEnd)
-                .offset(x = 10.dp, y = 14.dp)
-        )
-
-        // Floating Camera Badge (Top Left)
-        Editorial3DLayerBox(
+        // Top Left: PhonePe Badge
+        Box(
             modifier = Modifier
                 .align(Alignment.TopStart)
-                .offset(x = (-8).dp, y = (-8).dp)
-                .graphicsLayer { translationY = if (reducedMotion) 0f else bob },
-            shape = CircleShape,
-            depthX = 2.5.dp,
-            depthY = 3.5.dp,
-            extrusionColor = InkBlack,
-            extrusionBorderColor = InkBlack
+                .offset(x = 6.dp, y = 20.dp)
         ) {
-            Surface(
-                modifier = Modifier.size(40.dp),
-                shape = CircleShape,
-                color = PaleYellowTint,
-                border = BorderStroke(1.8.dp, InkBlack)
-            ) {
-                Box(modifier = Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
-                    Icon(imageVector = Icons.Default.PhotoCamera, contentDescription = null, tint = InkBlack, modifier = Modifier.size(20.dp))
-                }
-            }
+            FloatingPhonePePillBadge(bobOffset = if (reducedMotion) 0f else bob)
+            ComicActionTicks(
+                angleDegrees = 135f,
+                modifier = Modifier
+                    .size(24.dp)
+                    .align(Alignment.TopStart)
+                    .offset(x = (-16).dp, y = (-12).dp)
+            )
+        }
+
+        // Top Right: ₹200 Orange Rupee Bill
+        Box(
+            modifier = Modifier
+                .align(Alignment.TopEnd)
+                .offset(x = (-4).dp, y = 24.dp)
+        ) {
+            FloatingRupeeBill(
+                denomination = "200",
+                primaryColor = Color(0xFFF38A3E),
+                watermarkColor = Color(0xFFD96E25),
+                tiltAngle = 10f,
+                bobOffset = if (reducedMotion) 0f else -bob
+            )
+            ComicActionTicks(
+                angleDegrees = 45f,
+                modifier = Modifier
+                    .size(24.dp)
+                    .align(Alignment.TopEnd)
+                    .offset(x = 16.dp, y = (-12).dp)
+            )
+        }
+
+        // Bottom Left: Blue Rupee Coin
+        Box(
+            modifier = Modifier
+                .align(Alignment.BottomStart)
+                .offset(x = 10.dp, y = (-8).dp)
+        ) {
+            FloatingCoinComic(
+                symbolColor = PureWhite,
+                coinColor = Color(0xFF3B82F6),
+                sizeDp = 50,
+                wobbleOffset = if (reducedMotion) 0f else bob,
+                wobbleRotation = -10f
+            )
+            ComicActionTicks(
+                angleDegrees = 225f,
+                modifier = Modifier
+                    .size(24.dp)
+                    .align(Alignment.BottomStart)
+                    .offset(x = (-16).dp, y = 14.dp)
+            )
+        }
+
+        // Bottom Right: Gold Rupee Coin
+        Box(
+            modifier = Modifier
+                .align(Alignment.BottomEnd)
+                .offset(x = (-10).dp, y = (-4).dp)
+        ) {
+            FloatingCoinComic(
+                symbolColor = InkBlack,
+                coinColor = SunnyYellow,
+                sizeDp = 50,
+                wobbleOffset = if (reducedMotion) 0f else -bob,
+                wobbleRotation = 8f
+            )
+            ComicActionTicks(
+                angleDegrees = 315f,
+                modifier = Modifier
+                    .size(24.dp)
+                    .align(Alignment.BottomEnd)
+                    .offset(x = 16.dp, y = 14.dp)
+            )
         }
     }
 }
 
 @Composable
-private fun MiniMockOptionStrip(title: String, color: Color, icon: androidx.compose.ui.graphics.vector.ImageVector) {
+private fun Slide2OptionPill(
+    title: String,
+    icon: androidx.compose.ui.graphics.vector.ImageVector,
+    color: Color
+) {
     Surface(
         modifier = Modifier.fillMaxWidth(),
-        shape = RoundedCornerShape(12.dp),
+        shape = RoundedCornerShape(14.dp),
         color = color,
-        border = BorderStroke(1.5.dp, InkBlack)
+        border = BorderStroke(1.8.dp, InkBlack)
     ) {
         Row(
-            modifier = Modifier.padding(horizontal = 12.dp, vertical = 8.dp),
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(horizontal = 14.dp, vertical = 9.dp),
             verticalAlignment = Alignment.CenterVertically,
-            horizontalArrangement = Arrangement.spacedBy(10.dp)
+            horizontalArrangement = Arrangement.SpaceBetween
         ) {
-            Icon(imageVector = icon, contentDescription = null, tint = InkBlack, modifier = Modifier.size(16.dp))
-            Text(title, style = CondensedCardTitleStyle.copy(fontSize = 12.sp), color = InkBlack)
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                Icon(icon, contentDescription = null, tint = InkBlack, modifier = Modifier.size(18.dp))
+                Spacer(modifier = Modifier.width(10.dp))
+                Text(
+                    text = title,
+                    style = CondensedCardTitleStyle.copy(fontSize = 13.sp, fontWeight = FontWeight.Black),
+                    color = InkBlack
+                )
+            }
+            Text("TAP →", style = CondensedCardTitleStyle.copy(fontSize = 11.sp, fontWeight = FontWeight.Black), color = InkBlack)
         }
     }
 }
 
-// --- SLIDE 3 MINI MOCK: Review Card with EXAMPLE Tag + CRED Badge + ₹100 Bill ---
+// ============================================================================
+// SLIDE 3: YOU STAY IN CONTROL (CONFIRM, EDIT, NO DUPLICATES)
+// ============================================================================
 @Composable
-private fun Slide3ReviewMiniMock(reducedMotion: Boolean) {
+private fun Slide3ControlScene(reducedMotion: Boolean) {
     val infiniteTransition = rememberInfiniteTransition(label = "slide3_anims")
     val bob by infiniteTransition.animateFloat(
-        initialValue = -6f,
-        targetValue = 6f,
+        initialValue = -5f,
+        targetValue = 5f,
         animationSpec = infiniteRepeatable(
-            animation = tween(2300, easing = FastOutSlowInEasing),
+            animation = tween(2000, easing = FastOutSlowInEasing),
             repeatMode = RepeatMode.Reverse
         ),
         label = "bob_slide3"
@@ -1161,155 +1503,222 @@ private fun Slide3ReviewMiniMock(reducedMotion: Boolean) {
     Box(
         modifier = Modifier
             .fillMaxWidth()
-            .height(310.dp),
+            .height(350.dp),
         contentAlignment = Alignment.Center
     ) {
         Editorial3DLayerBox(
             modifier = Modifier
-                .fillMaxWidth()
-                .height(290.dp),
-            shape = RoundedCornerShape(28.dp),
-            extrusionColor = InkBlack,
-            extrusionBorderColor = InkBlack,
+                .fillMaxWidth(0.96f)
+                .height(280.dp)
+                .graphicsLayer { rotationZ = -1.5f },
+            shape = RoundedCornerShape(26.dp),
             depthX = 4.dp,
-            depthY = 6.dp
+            depthY = 6.dp,
+            extrusionColor = InkBlack,
+            extrusionBorderColor = InkBlack
         ) {
             Surface(
                 modifier = Modifier
                     .fillMaxSize()
                     .testTag("slide3_mock_card"),
-                shape = RoundedCornerShape(28.dp),
+                shape = RoundedCornerShape(26.dp),
                 color = PureWhite,
-                border = BorderStroke(2.dp, InkBlack)
+                border = BorderStroke(2.5.dp, InkBlack)
             ) {
-                Column(
+                Box(
                     modifier = Modifier
                         .fillMaxSize()
-                        .padding(20.dp),
-                    verticalArrangement = Arrangement.SpaceBetween
+                        .padding(top = 40.dp, start = 14.dp, end = 14.dp, bottom = 14.dp),
+                    contentAlignment = Alignment.Center
                 ) {
-                    // Top row with merchant and EXAMPLE tag
-                    Row(
+                    Column(
                         modifier = Modifier.fillMaxWidth(),
-                        horizontalArrangement = Arrangement.SpaceBetween,
-                        verticalAlignment = Alignment.CenterVertically
+                        verticalArrangement = Arrangement.spacedBy(10.dp)
                     ) {
-                        Column {
-                            Text("BLUE TOKAI COFFEE", style = CondensedCardTitleStyle.copy(fontSize = 18.sp), color = InkBlack)
-                            Text("Food & Drinks · Today, 10:15 AM", style = MaterialTheme.typography.bodySmall, color = InkBlack.copy(alpha = 0.7f))
-                        }
-                        // Mandatory small EXAMPLE tag
+                        // Zomato Card
                         Surface(
-                            shape = CircleShape,
-                            color = SunnyYellow,
-                            border = BorderStroke(1.4.dp, InkBlack)
-                        ) {
-                            Text(
-                                text = "EXAMPLE",
-                                style = CondensedCardTitleStyle.copy(fontSize = 10.sp),
-                                color = InkBlack,
-                                modifier = Modifier.padding(horizontal = 8.dp, vertical = 3.dp)
-                            )
-                        }
-                    }
-
-                    // Middle: Big amount & verified check chip
-                    Row(
-                        modifier = Modifier.fillMaxWidth(),
-                        horizontalArrangement = Arrangement.SpaceBetween,
-                        verticalAlignment = Alignment.CenterVertically
-                    ) {
-                        Text("₹1,249.00", style = CondensedCardTitleStyle.copy(fontSize = 32.sp), color = InkBlack)
-                        Surface(
-                            shape = CircleShape,
-                            color = EditorialMint,
-                            border = BorderStroke(1.4.dp, InkBlack)
+                            modifier = Modifier.fillMaxWidth(),
+                            shape = RoundedCornerShape(16.dp),
+                            color = Color(0xFFFFF2F0),
+                            border = BorderStroke(1.5.dp, Color(0xFFFFD5CE))
                         ) {
                             Row(
-                                modifier = Modifier.padding(horizontal = 10.dp, vertical = 4.dp),
-                                verticalAlignment = Alignment.CenterVertically,
-                                horizontalArrangement = Arrangement.spacedBy(4.dp)
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .padding(12.dp),
+                                horizontalArrangement = Arrangement.SpaceBetween,
+                                verticalAlignment = Alignment.CenterVertically
                             ) {
-                                Icon(imageVector = Icons.Default.Check, contentDescription = null, tint = InkBlack, modifier = Modifier.size(13.dp))
-                                Text("Ready", style = CondensedCardTitleStyle.copy(fontSize = 11.sp), color = InkBlack)
+                                Row(verticalAlignment = Alignment.CenterVertically) {
+                                    Box(
+                                        modifier = Modifier
+                                            .size(36.dp)
+                                            .clip(RoundedCornerShape(10.dp))
+                                            .background(Color(0xFFE23744)),
+                                        contentAlignment = Alignment.Center
+                                    ) {
+                                        Icon(Icons.Default.Restaurant, contentDescription = null, tint = PureWhite, modifier = Modifier.size(20.dp))
+                                    }
+                                    Spacer(modifier = Modifier.width(10.dp))
+                                    Column {
+                                        Text("ZOMATO DINING", style = CondensedCardTitleStyle.copy(fontSize = 13.sp, fontWeight = FontWeight.Black), color = InkBlack)
+                                        Text("Food & Dining", style = MaterialTheme.typography.labelSmall.copy(fontSize = 11.sp), color = InkBlack.copy(alpha = 0.65f))
+                                    }
+                                }
+                                Text("₹680", style = CondensedCardTitleStyle.copy(fontSize = 20.sp, fontWeight = FontWeight.Black), color = InkBlack)
                             }
                         }
-                    }
 
-                    // Bottom Black CONFIRM Button
-                    Surface(
-                        shape = CircleShape,
-                        color = InkBlack,
-                        border = BorderStroke(1.8.dp, InkBlack),
-                        modifier = Modifier.fillMaxWidth()
-                    ) {
-                        Text(
-                            text = "CONFIRM PAYMENT",
-                            style = CondensedCardTitleStyle.copy(fontSize = 14.sp),
-                            color = PureWhite,
-                            textAlign = TextAlign.Center,
-                            modifier = Modifier.padding(vertical = 12.dp)
-                        )
+                        // Duplicate Skip pill
+                        Surface(
+                            modifier = Modifier.fillMaxWidth(),
+                            shape = RoundedCornerShape(12.dp),
+                            color = PaleLavenderTint,
+                            border = BorderStroke(1.2.dp, InkBlack)
+                        ) {
+                            Row(
+                                modifier = Modifier.padding(horizontal = 12.dp, vertical = 6.dp),
+                                verticalAlignment = Alignment.CenterVertically
+                            ) {
+                                Icon(Icons.Default.Shield, contentDescription = null, tint = InkBlack, modifier = Modifier.size(14.dp))
+                                Spacer(modifier = Modifier.width(6.dp))
+                                Text("Duplicate reference skipped automatically", style = CondensedCardTitleStyle.copy(fontSize = 11.sp), color = InkBlack)
+                            }
+                        }
+
+                        // Confirm Button 3D Pill
+                        Editorial3DLayerBox(
+                            modifier = Modifier.fillMaxWidth(),
+                            shape = RoundedCornerShape(14.dp),
+                            depthX = 2.dp,
+                            depthY = 3.dp,
+                            extrusionColor = InkBlack
+                        ) {
+                            Surface(
+                                modifier = Modifier.fillMaxWidth(),
+                                shape = RoundedCornerShape(14.dp),
+                                color = EditorialMint,
+                                border = BorderStroke(2.dp, InkBlack)
+                            ) {
+                                Row(
+                                    modifier = Modifier.padding(vertical = 10.dp),
+                                    horizontalArrangement = Arrangement.Center,
+                                    verticalAlignment = Alignment.CenterVertically
+                                ) {
+                                    Icon(Icons.Default.Check, contentDescription = null, tint = InkBlack, modifier = Modifier.size(16.dp))
+                                    Spacer(modifier = Modifier.width(6.dp))
+                                    Text("CONFIRM & SAVE", style = CondensedCardTitleStyle.copy(fontSize = 14.sp, fontWeight = FontWeight.Black), color = InkBlack)
+                                }
+                            }
+                        }
                     }
                 }
             }
         }
 
-        // Floating CRED Luxe Card Badge (Top Right)
-        FloatingCredBadge(
-            bobOffset = if (reducedMotion) 0f else bob,
+        // Mascot
+        SmilingScannerMascot(
+            mode = 2,
+            modifier = Modifier
+                .align(Alignment.TopCenter)
+                .offset(y = (-14).dp)
+        )
+
+        // Top Left: Paytm Badge
+        Box(
+            modifier = Modifier
+                .align(Alignment.TopStart)
+                .offset(x = 6.dp, y = 20.dp)
+        ) {
+            FloatingPaytmPillBadge(bobOffset = if (reducedMotion) 0f else bob)
+            ComicActionTicks(
+                angleDegrees = 135f,
+                modifier = Modifier
+                    .size(24.dp)
+                    .align(Alignment.TopStart)
+                    .offset(x = (-16).dp, y = (-12).dp)
+            )
+        }
+
+        // Top Right: ₹100 Blue Bill
+        Box(
             modifier = Modifier
                 .align(Alignment.TopEnd)
-                .offset(x = 12.dp, y = (-12).dp)
-        )
+                .offset(x = (-4).dp, y = 24.dp)
+        ) {
+            FloatingRupeeBill(
+                denomination = "100",
+                primaryColor = Color(0xFF6B93DC),
+                watermarkColor = Color(0xFF4C75BF),
+                tiltAngle = 10f,
+                bobOffset = if (reducedMotion) 0f else -bob
+            )
+            ComicActionTicks(
+                angleDegrees = 45f,
+                modifier = Modifier
+                    .size(24.dp)
+                    .align(Alignment.TopEnd)
+                    .offset(x = 16.dp, y = (-12).dp)
+            )
+        }
 
-        // Floating ₹100 Banknote (Bottom Left)
-        FloatingRupeeBill(
-            denomination = "100",
-            primaryColor = Color(0xFF6B7FB5),
-            accentColor = Color(0xFF455584),
-            tiltAngle = 10f,
-            bobOffset = if (reducedMotion) 0f else -bob,
+        // Bottom Left: Mint Rupee Coin
+        Box(
             modifier = Modifier
                 .align(Alignment.BottomStart)
-                .offset(x = (-12).dp, y = 12.dp)
-        )
+                .offset(x = 10.dp, y = (-8).dp)
+        ) {
+            FloatingCoinComic(
+                symbolColor = InkBlack,
+                coinColor = EditorialMint,
+                sizeDp = 50,
+                wobbleOffset = if (reducedMotion) 0f else bob,
+                wobbleRotation = -10f
+            )
+            ComicActionTicks(
+                angleDegrees = 225f,
+                modifier = Modifier
+                    .size(24.dp)
+                    .align(Alignment.BottomStart)
+                    .offset(x = (-16).dp, y = 14.dp)
+            )
+        }
 
-        // Floating Duplicate Skip Shield (Bottom Right)
-        Editorial3DLayerBox(
+        // Bottom Right: Coral Rupee Coin
+        Box(
             modifier = Modifier
                 .align(Alignment.BottomEnd)
-                .offset(x = 8.dp, y = 14.dp)
-                .graphicsLayer { translationY = if (reducedMotion) 0f else bob },
-            shape = CircleShape,
-            depthX = 2.dp,
-            depthY = 3.dp,
-            extrusionColor = InkBlack,
-            extrusionBorderColor = InkBlack
+                .offset(x = (-10).dp, y = (-4).dp)
         ) {
-            Surface(
-                modifier = Modifier.size(38.dp),
-                shape = CircleShape,
-                color = PaleYellowTint,
-                border = BorderStroke(1.5.dp, InkBlack)
-            ) {
-                Box(modifier = Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
-                    Icon(imageVector = Icons.Default.Shield, contentDescription = null, tint = InkBlack, modifier = Modifier.size(18.dp))
-                }
-            }
+            FloatingCoinComic(
+                symbolColor = PureWhite,
+                coinColor = EditorialCoral,
+                sizeDp = 50,
+                wobbleOffset = if (reducedMotion) 0f else -bob,
+                wobbleRotation = 8f
+            )
+            ComicActionTicks(
+                angleDegrees = 315f,
+                modifier = Modifier
+                    .size(24.dp)
+                    .align(Alignment.BottomEnd)
+                    .offset(x = 16.dp, y = 14.dp)
+            )
         }
     }
 }
 
-// --- SLIDE 4 MINI MOCK: 3D Weekly Pace Chart + Category Chips + Coins ---
+// ============================================================================
+// SLIDE 4: SEE WHERE IT GOES (INSIGHTS + BUDGETS)
+// ============================================================================
 @Composable
-private fun Slide4ChartsMiniMock(reducedMotion: Boolean) {
+private fun Slide4InsightsScene(reducedMotion: Boolean) {
     val infiniteTransition = rememberInfiniteTransition(label = "slide4_anims")
     val bob by infiniteTransition.animateFloat(
         initialValue = -5f,
         targetValue = 5f,
         animationSpec = infiniteRepeatable(
-            animation = tween(2000, easing = FastOutSlowInEasing),
+            animation = tween(2100, easing = FastOutSlowInEasing),
             repeatMode = RepeatMode.Reverse
         ),
         label = "bob_slide4"
@@ -1318,187 +1727,194 @@ private fun Slide4ChartsMiniMock(reducedMotion: Boolean) {
     Box(
         modifier = Modifier
             .fillMaxWidth()
-            .height(310.dp),
+            .height(350.dp),
         contentAlignment = Alignment.Center
     ) {
         Editorial3DLayerBox(
             modifier = Modifier
-                .fillMaxWidth()
-                .height(290.dp),
-            shape = RoundedCornerShape(28.dp),
-            extrusionColor = InkBlack,
-            extrusionBorderColor = InkBlack,
+                .fillMaxWidth(0.96f)
+                .height(280.dp)
+                .graphicsLayer { rotationZ = 1.5f },
+            shape = RoundedCornerShape(26.dp),
             depthX = 4.dp,
-            depthY = 6.dp
+            depthY = 6.dp,
+            extrusionColor = InkBlack,
+            extrusionBorderColor = InkBlack
         ) {
             Surface(
                 modifier = Modifier
                     .fillMaxSize()
                     .testTag("slide4_mock_card"),
-                shape = RoundedCornerShape(28.dp),
+                shape = RoundedCornerShape(26.dp),
                 color = PureWhite,
-                border = BorderStroke(2.dp, InkBlack)
+                border = BorderStroke(2.5.dp, InkBlack)
             ) {
                 Box(
                     modifier = Modifier
                         .fillMaxSize()
-                        .padding(18.dp),
+                        .padding(top = 40.dp, start = 14.dp, end = 14.dp, bottom = 14.dp),
                     contentAlignment = Alignment.Center
                 ) {
-                    // Background peeking card
-                    Surface(
-                        modifier = Modifier
-                            .fillMaxWidth(0.85f)
-                            .height(180.dp)
-                            .offset(x = 10.dp, y = (-12).dp),
-                        shape = RoundedCornerShape(20.dp),
-                        color = SunnyYellow,
-                        border = BorderStroke(1.5.dp, InkBlack)
-                    ) {}
-
-                    // Foreground Bar Chart Mock
-                    Surface(
-                        modifier = Modifier
-                            .fillMaxWidth(0.94f)
-                            .height(185.dp),
-                        shape = RoundedCornerShape(20.dp),
-                        color = EditorialCoral,
-                        border = BorderStroke(1.8.dp, InkBlack)
+                    Column(
+                        modifier = Modifier.fillMaxWidth(),
+                        verticalArrangement = Arrangement.spacedBy(10.dp)
                     ) {
-                        Column(
-                            modifier = Modifier
-                                .fillMaxSize()
-                                .padding(14.dp),
-                            verticalArrangement = Arrangement.SpaceBetween
+                        // Monthly Total Spend Callout
+                        Surface(
+                            modifier = Modifier.fillMaxWidth(),
+                            shape = RoundedCornerShape(14.dp),
+                            color = SunnyYellow,
+                            border = BorderStroke(1.8.dp, InkBlack)
                         ) {
-                            Row(
-                                modifier = Modifier.fillMaxWidth(),
-                                horizontalArrangement = Arrangement.SpaceBetween,
-                                verticalAlignment = Alignment.CenterVertically
-                            ) {
-                                Text("WEEKLY SPENDING", style = CondensedCardTitleStyle.copy(fontSize = 15.sp), color = InkBlack)
-                                Surface(
-                                    shape = CircleShape,
-                                    color = PureWhite,
-                                    border = BorderStroke(1.dp, InkBlack)
-                                ) {
-                                    Text(
-                                        "₹8,450",
-                                        style = CondensedCardTitleStyle.copy(fontSize = 11.sp),
-                                        color = InkBlack,
-                                        modifier = Modifier.padding(horizontal = 6.dp, vertical = 2.dp)
-                                    )
-                                }
-                            }
-
-                            // 6 mini 3D prism bars
-                            Row(
-                                modifier = Modifier
-                                    .fillMaxWidth()
-                                    .height(95.dp),
-                                horizontalArrangement = Arrangement.SpaceEvenly,
-                                verticalAlignment = Alignment.Bottom
-                            ) {
-                                val heights = listOf(0.4f, 0.75f, 0.5f, 0.95f, 0.35f, 0.65f)
-                                heights.forEachIndexed { idx, h ->
-                                    val barColor = if (idx == 3) EditorialMint else PureWhite
-                                    Box(
-                                        modifier = Modifier
-                                            .width(24.dp)
-                                            .height((95 * h).dp)
-                                            .clip(RoundedCornerShape(6.dp))
-                                            .background(barColor)
-                                            .border(1.2.dp, InkBlack, RoundedCornerShape(6.dp))
-                                    )
-                                }
+                            Column(modifier = Modifier.padding(10.dp)) {
+                                Text("THIS MONTH SPENT", style = CondensedCardTitleStyle.copy(fontSize = 11.sp), color = InkBlack)
+                                Text("₹18,450", style = CondensedCardTitleStyle.copy(fontSize = 24.sp, fontWeight = FontWeight.Black), color = InkBlack)
                             }
                         }
+
+                        // Category Bar: Food
+                        Slide4CategoryProgress(name = "Food & Dining", spent = "₹8,200", fraction = 0.65f, barColor = EditorialCoral)
+                        // Category Bar: Groceries
+                        Slide4CategoryProgress(name = "Groceries", spent = "₹5,400", fraction = 0.45f, barColor = Color(0xFF7C5CFC))
+                        // Category Bar: Shopping
+                        Slide4CategoryProgress(name = "Shopping", spent = "₹4,850", fraction = 0.35f, barColor = EditorialAqua)
                     }
                 }
             }
         }
 
-        // Floating Category Chip: Food (Top Left)
-        FloatingCategoryChip(
-            label = "Food",
-            icon = Icons.Default.Restaurant,
-            color = PaleYellowTint,
-            bobOffset = if (reducedMotion) 0f else bob,
+        // Mascot
+        SmilingScannerMascot(
+            mode = 3,
+            modifier = Modifier
+                .align(Alignment.TopCenter)
+                .offset(y = (-14).dp)
+        )
+
+        // Top Left: CRED Badge
+        Box(
             modifier = Modifier
                 .align(Alignment.TopStart)
-                .offset(x = (-8).dp, y = (-8).dp)
-        )
+                .offset(x = 6.dp, y = 20.dp)
+        ) {
+            FloatingCredPillBadge(bobOffset = if (reducedMotion) 0f else bob)
+            ComicActionTicks(
+                angleDegrees = 135f,
+                modifier = Modifier
+                    .size(24.dp)
+                    .align(Alignment.TopStart)
+                    .offset(x = (-16).dp, y = (-12).dp)
+            )
+        }
 
-        // Floating Category Chip: Shopping (Top Right)
-        FloatingCategoryChip(
-            label = "Shopping",
-            icon = Icons.Default.ShoppingBag,
-            color = PalePinkTint,
-            bobOffset = if (reducedMotion) 0f else -bob,
+        // Top Right: ₹2,000 Pink Rupee Bill
+        Box(
             modifier = Modifier
                 .align(Alignment.TopEnd)
-                .offset(x = 10.dp, y = (-10).dp)
-        )
+                .offset(x = (-4).dp, y = 24.dp)
+        ) {
+            FloatingRupeeBill(
+                denomination = "2000",
+                primaryColor = Color(0xFFE8629B),
+                watermarkColor = Color(0xFFC7437C),
+                tiltAngle = 10f,
+                bobOffset = if (reducedMotion) 0f else -bob
+            )
+            ComicActionTicks(
+                angleDegrees = 45f,
+                modifier = Modifier
+                    .size(24.dp)
+                    .align(Alignment.TopEnd)
+                    .offset(x = 16.dp, y = (-12).dp)
+            )
+        }
 
-        // Floating Gold Coin (Bottom Left)
-        FloatingCoin3D(
-            sizeDp = 36,
-            wobbleOffset = if (reducedMotion) 0f else bob,
-            wobbleRotation = -12f,
+        // Bottom Left: Lavender Rupee Coin
+        Box(
             modifier = Modifier
                 .align(Alignment.BottomStart)
-                .offset(x = (-8).dp, y = 10.dp)
-        )
+                .offset(x = 10.dp, y = (-8).dp)
+        ) {
+            FloatingCoinComic(
+                symbolColor = InkBlack,
+                coinColor = PaleLavenderTint,
+                sizeDp = 50,
+                wobbleOffset = if (reducedMotion) 0f else bob,
+                wobbleRotation = -8f
+            )
+            ComicActionTicks(
+                angleDegrees = 225f,
+                modifier = Modifier
+                    .size(24.dp)
+                    .align(Alignment.BottomStart)
+                    .offset(x = (-16).dp, y = 14.dp)
+            )
+        }
 
-        // Floating Category Chip: Fuel (Bottom Right)
-        FloatingCategoryChip(
-            label = "Fuel",
-            icon = Icons.Default.LocalGasStation,
-            color = PaleLavenderTint,
-            bobOffset = if (reducedMotion) 0f else -bob,
+        // Bottom Right: Gold Rupee Coin
+        Box(
             modifier = Modifier
                 .align(Alignment.BottomEnd)
-                .offset(x = 8.dp, y = 12.dp)
-        )
-    }
-}
-
-@Composable
-private fun FloatingCategoryChip(
-    label: String,
-    icon: androidx.compose.ui.graphics.vector.ImageVector,
-    color: Color,
-    bobOffset: Float,
-    modifier: Modifier = Modifier
-) {
-    Editorial3DLayerBox(
-        modifier = modifier.graphicsLayer { translationY = bobOffset },
-        shape = CircleShape,
-        depthX = 2.dp,
-        depthY = 3.dp,
-        extrusionColor = InkBlack,
-        extrusionBorderColor = InkBlack
-    ) {
-        Surface(
-            shape = CircleShape,
-            color = color,
-            border = BorderStroke(1.4.dp, InkBlack)
+                .offset(x = (-10).dp, y = (-4).dp)
         ) {
-            Row(
-                modifier = Modifier.padding(horizontal = 9.dp, vertical = 5.dp),
-                verticalAlignment = Alignment.CenterVertically,
-                horizontalArrangement = Arrangement.spacedBy(4.dp)
-            ) {
-                Icon(imageVector = icon, contentDescription = null, tint = InkBlack, modifier = Modifier.size(13.dp))
-                Text(label, style = CondensedCardTitleStyle.copy(fontSize = 11.sp), color = InkBlack)
-            }
+            FloatingCoinComic(
+                symbolColor = InkBlack,
+                coinColor = SunnyYellow,
+                sizeDp = 50,
+                wobbleOffset = if (reducedMotion) 0f else -bob,
+                wobbleRotation = 12f
+            )
+            ComicActionTicks(
+                angleDegrees = 315f,
+                modifier = Modifier
+                    .size(24.dp)
+                    .align(Alignment.BottomEnd)
+                    .offset(x = 16.dp, y = 14.dp)
+            )
         }
     }
 }
 
-// --- SLIDE 5 MINI MOCK: 3D Safe Vault + Cloud Backup Badge + Key ---
 @Composable
-private fun Slide5PrivacyMiniMock(reducedMotion: Boolean) {
+private fun Slide4CategoryProgress(
+    name: String,
+    spent: String,
+    fraction: Float,
+    barColor: Color
+) {
+    Column {
+        Row(
+            modifier = Modifier.fillMaxWidth(),
+            horizontalArrangement = Arrangement.SpaceBetween
+        ) {
+            Text(name, style = CondensedCardTitleStyle.copy(fontSize = 11.sp, fontWeight = FontWeight.Black), color = InkBlack)
+            Text(spent, style = CondensedCardTitleStyle.copy(fontSize = 11.sp), color = InkBlack)
+        }
+        Spacer(modifier = Modifier.height(3.dp))
+        Box(
+            modifier = Modifier
+                .fillMaxWidth()
+                .height(8.dp)
+                .clip(RoundedCornerShape(4.dp))
+                .background(Color(0xFFE5E5EA))
+                .border(0.8.dp, InkBlack, RoundedCornerShape(4.dp))
+        ) {
+            Box(
+                modifier = Modifier
+                    .fillMaxWidth(fraction)
+                    .fillMaxHeight()
+                    .clip(RoundedCornerShape(4.dp))
+                    .background(barColor)
+            )
+        }
+    }
+}
+
+// ============================================================================
+// SLIDE 5: YOUR MONEY, YOUR PHONE (PRIVACY + BACKUP)
+// ============================================================================
+@Composable
+private fun Slide5PrivacyScene(reducedMotion: Boolean) {
     val infiniteTransition = rememberInfiniteTransition(label = "slide5_anims")
     val bob by infiniteTransition.animateFloat(
         initialValue = -5f,
@@ -1513,273 +1929,171 @@ private fun Slide5PrivacyMiniMock(reducedMotion: Boolean) {
     Box(
         modifier = Modifier
             .fillMaxWidth()
-            .height(310.dp),
+            .height(350.dp),
         contentAlignment = Alignment.Center
     ) {
         Editorial3DLayerBox(
             modifier = Modifier
-                .fillMaxWidth()
-                .height(290.dp),
-            shape = RoundedCornerShape(28.dp),
-            extrusionColor = InkBlack,
-            extrusionBorderColor = InkBlack,
+                .fillMaxWidth(0.96f)
+                .height(280.dp)
+                .graphicsLayer { rotationZ = -1.5f },
+            shape = RoundedCornerShape(26.dp),
             depthX = 4.dp,
-            depthY = 6.dp
+            depthY = 6.dp,
+            extrusionColor = InkBlack,
+            extrusionBorderColor = InkBlack
         ) {
             Surface(
                 modifier = Modifier
                     .fillMaxSize()
                     .testTag("slide5_mock_card"),
-                shape = RoundedCornerShape(28.dp),
+                shape = RoundedCornerShape(26.dp),
                 color = PureWhite,
-                border = BorderStroke(2.dp, InkBlack)
+                border = BorderStroke(2.5.dp, InkBlack)
             ) {
-                Column(
+                Box(
                     modifier = Modifier
                         .fillMaxSize()
-                        .padding(22.dp),
-                    horizontalAlignment = Alignment.CenterHorizontally,
-                    verticalArrangement = Arrangement.SpaceBetween
+                        .padding(top = 40.dp, start = 14.dp, end = 14.dp, bottom = 14.dp),
+                    contentAlignment = Alignment.Center
                 ) {
-                    // 3D Phone & Brass Lock Badge
-                    Box(
-                        modifier = Modifier.size(95.dp),
-                        contentAlignment = Alignment.Center
+                    Column(
+                        modifier = Modifier.fillMaxWidth(),
+                        verticalArrangement = Arrangement.spacedBy(10.dp)
                     ) {
-                        Surface(
-                            modifier = Modifier.size(82.dp),
-                            shape = RoundedCornerShape(22.dp),
-                            color = EditorialMint,
-                            border = BorderStroke(2.dp, InkBlack)
-                        ) {
-                            Column(
-                                modifier = Modifier.fillMaxSize(),
-                                horizontalAlignment = Alignment.CenterHorizontally,
-                                verticalArrangement = Arrangement.Center
-                            ) {
-                                Icon(imageVector = Icons.Default.PhoneAndroid, contentDescription = null, tint = InkBlack, modifier = Modifier.size(36.dp))
-                            }
-                        }
-                        // 3D Padlock
-                        Surface(
-                            modifier = Modifier
-                                .size(36.dp)
-                                .align(Alignment.BottomEnd),
-                            shape = CircleShape,
-                            color = SunnyYellow,
-                            border = BorderStroke(1.8.dp, InkBlack)
-                        ) {
-                            Column(
-                                modifier = Modifier.fillMaxSize(),
-                                horizontalAlignment = Alignment.CenterHorizontally,
-                                verticalArrangement = Arrangement.Center
-                            ) {
-                                Icon(imageVector = Icons.Default.Lock, contentDescription = null, tint = InkBlack, modifier = Modifier.size(18.dp))
-                            }
-                        }
-                    }
-
-                    Text(
-                        text = "100% PRIVATE TO THIS DEVICE",
-                        style = CondensedCardTitleStyle.copy(fontSize = 17.sp),
-                        color = InkBlack,
-                        textAlign = TextAlign.Center
-                    )
-
-                    // Export Button Mock
-                    Surface(
-                        shape = CircleShape,
-                        color = InkBlack,
-                        border = BorderStroke(1.8.dp, InkBlack),
-                        modifier = Modifier.fillMaxWidth(0.88f)
-                    ) {
-                        Text(
-                            text = "EXPORT BACKUP (.JSON)",
-                            style = CondensedCardTitleStyle.copy(fontSize = 14.sp),
-                            color = PureWhite,
-                            textAlign = TextAlign.Center,
-                            modifier = Modifier.padding(vertical = 12.dp)
-                        )
+                        Slide5SecurityRow(title = "100% ON-DEVICE DATABASE", subtitle = "Stored locally on your phone", icon = Icons.Default.Lock, color = EditorialMint)
+                        Slide5SecurityRow(title = "ENCRYPTED DRIVE BACKUP", subtitle = "Your own private Google Drive", icon = Icons.Default.CloudDone, color = EditorialAqua)
+                        Slide5SecurityRow(title = "ZERO THIRD-PARTY ADS", subtitle = "No trackers or telemetry", icon = Icons.Default.Shield, color = PaleLavenderTint)
                     }
                 }
             }
         }
 
-        // Floating Cloud Backup Badge (Top Right)
-        Editorial3DLayerBox(
+        // Mascot
+        SmilingScannerMascot(
+            mode = 4,
+            modifier = Modifier
+                .align(Alignment.TopCenter)
+                .offset(y = (-14).dp)
+        )
+
+        // Top Left: UPI Shield Badge
+        Box(
+            modifier = Modifier
+                .align(Alignment.TopStart)
+                .offset(x = 6.dp, y = 20.dp)
+        ) {
+            FloatingGPayPillBadge(bobOffset = if (reducedMotion) 0f else bob)
+            ComicActionTicks(
+                angleDegrees = 135f,
+                modifier = Modifier
+                    .size(24.dp)
+                    .align(Alignment.TopStart)
+                    .offset(x = (-16).dp, y = (-12).dp)
+            )
+        }
+
+        // Top Right: ₹500 Green Bill
+        Box(
             modifier = Modifier
                 .align(Alignment.TopEnd)
-                .offset(x = 12.dp, y = (-10).dp)
-                .graphicsLayer { translationY = if (reducedMotion) 0f else bob },
-            shape = CircleShape,
-            depthX = 2.5.dp,
-            depthY = 3.5.dp,
-            extrusionColor = InkBlack,
-            extrusionBorderColor = InkBlack
+                .offset(x = (-4).dp, y = 24.dp)
         ) {
-            Surface(
-                modifier = Modifier.size(42.dp),
-                shape = CircleShape,
-                color = PaleYellowTint,
-                border = BorderStroke(1.6.dp, InkBlack)
-            ) {
-                Box(modifier = Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
-                    Icon(imageVector = Icons.Default.CloudDone, contentDescription = null, tint = InkBlack, modifier = Modifier.size(20.dp))
-                }
-            }
+            FloatingRupeeBill(
+                denomination = "500",
+                primaryColor = Color(0xFF6EC68E),
+                watermarkColor = Color(0xFF4FA870),
+                tiltAngle = 10f,
+                bobOffset = if (reducedMotion) 0f else -bob
+            )
+            ComicActionTicks(
+                angleDegrees = 45f,
+                modifier = Modifier
+                    .size(24.dp)
+                    .align(Alignment.TopEnd)
+                    .offset(x = 16.dp, y = (-12).dp)
+            )
         }
 
-        // Floating Security Key Badge (Bottom Left)
-        Editorial3DLayerBox(
+        // Bottom Left: Emerald Rupee Coin
+        Box(
             modifier = Modifier
                 .align(Alignment.BottomStart)
-                .offset(x = (-10).dp, y = 12.dp)
-                .graphicsLayer { translationY = if (reducedMotion) 0f else -bob },
-            shape = CircleShape,
-            depthX = 2.5.dp,
-            depthY = 3.5.dp,
-            extrusionColor = InkBlack,
-            extrusionBorderColor = InkBlack
+                .offset(x = 10.dp, y = (-8).dp)
         ) {
-            Surface(
-                modifier = Modifier.size(40.dp),
-                shape = CircleShape,
-                color = PaleLavenderTint,
-                border = BorderStroke(1.6.dp, InkBlack)
-            ) {
-                Box(modifier = Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
-                    Icon(imageVector = Icons.Default.Key, contentDescription = null, tint = InkBlack, modifier = Modifier.size(18.dp))
-                }
-            }
-        }
-    }
-}
-
-// --- SKIP PILL BUTTON ---
-@Composable
-private fun OnboardingSkipPill(
-    onClick: () -> Unit,
-    modifier: Modifier = Modifier
-) {
-    val interactionSource = remember { MutableInteractionSource() }
-    val isPressed by interactionSource.collectIsPressedAsState()
-    val reducedMotion = LocalReducedMotion.current
-
-    val pressFraction by animateFloatAsState(
-        targetValue = if (isPressed) 1f else 0f,
-        animationSpec = Motion.pressSpring(reducedMotion),
-        label = "skip_press"
-    )
-
-    Box(
-        modifier = modifier
-            .padding(end = 2.dp, bottom = 3.dp)
-            .clickable(
-                interactionSource = interactionSource,
-                indication = null,
-                onClick = onClick
+            FloatingCoinComic(
+                symbolColor = PureWhite,
+                coinColor = Color(0xFF059669),
+                sizeDp = 50,
+                wobbleOffset = if (reducedMotion) 0f else bob,
+                wobbleRotation = -10f
             )
-            .semantics {
-                role = Role.Button
-                contentDescription = "Skip onboarding"
-            }
-            .testTag("onboarding_skip_button")
-    ) {
+            ComicActionTicks(
+                angleDegrees = 225f,
+                modifier = Modifier
+                    .size(24.dp)
+                    .align(Alignment.BottomStart)
+                    .offset(x = (-16).dp, y = 14.dp)
+            )
+        }
+
+        // Bottom Right: Purple Rupee Coin
         Box(
             modifier = Modifier
-                .matchParentSize()
-                .offset(
-                    x = (2 * (1f - pressFraction)).dp,
-                    y = (3 * (1f - pressFraction)).dp
-                )
-                .clip(CircleShape)
-                .background(InkBlack)
-        )
-        Surface(
-            modifier = Modifier.offset(
-                x = (2 * pressFraction).dp,
-                y = (3 * pressFraction).dp
-            ),
-            shape = CircleShape,
-            color = PureWhite,
-            border = BorderStroke(1.8.dp, InkBlack)
+                .align(Alignment.BottomEnd)
+                .offset(x = (-10).dp, y = (-4).dp)
         ) {
-            Text(
-                text = "SKIP",
-                style = CondensedCardTitleStyle.copy(fontSize = 13.sp),
-                color = InkBlack,
-                modifier = Modifier.padding(horizontal = 16.dp, vertical = 7.dp)
+            FloatingCoinComic(
+                symbolColor = PureWhite,
+                coinColor = Color(0xFF7C5CFC),
+                sizeDp = 50,
+                wobbleOffset = if (reducedMotion) 0f else -bob,
+                wobbleRotation = 10f
+            )
+            ComicActionTicks(
+                angleDegrees = 315f,
+                modifier = Modifier
+                    .size(24.dp)
+                    .align(Alignment.BottomEnd)
+                    .offset(x = 16.dp, y = 14.dp)
             )
         }
     }
 }
 
-// --- ACTION BUTTON (NEXT / LET'S GO) ---
 @Composable
-private fun OnboardingActionButton(
-    label: String,
-    onClick: () -> Unit,
-    modifier: Modifier = Modifier
+private fun Slide5SecurityRow(
+    title: String,
+    subtitle: String,
+    icon: androidx.compose.ui.graphics.vector.ImageVector,
+    color: Color
 ) {
-    val interactionSource = remember { MutableInteractionSource() }
-    val isPressed by interactionSource.collectIsPressedAsState()
-    val reducedMotion = LocalReducedMotion.current
-
-    val pressFraction by animateFloatAsState(
-        targetValue = if (isPressed) 1f else 0f,
-        animationSpec = Motion.pressSpring(reducedMotion),
-        label = "action_btn_press"
-    )
-
-    Box(
-        modifier = modifier
-            .padding(end = 3.dp, bottom = 4.dp)
-            .clickable(
-                interactionSource = interactionSource,
-                indication = null,
-                onClick = onClick
-            )
-            .semantics {
-                role = Role.Button
-                contentDescription = label
-            }
-            .testTag("onboarding_action_button")
+    Surface(
+        modifier = Modifier.fillMaxWidth(),
+        shape = RoundedCornerShape(14.dp),
+        color = color,
+        border = BorderStroke(1.8.dp, InkBlack)
     ) {
-        Box(
+        Row(
             modifier = Modifier
-                .matchParentSize()
-                .offset(
-                    x = (3 * (1f - pressFraction)).dp,
-                    y = (4 * (1f - pressFraction)).dp
-                )
-                .clip(CircleShape)
-                .background(InkBlack)
-        )
-        Surface(
-            modifier = Modifier.offset(
-                x = (3 * pressFraction).dp,
-                y = (4 * pressFraction).dp
-            ),
-            shape = CircleShape,
-            color = SunnyYellow,
-            border = BorderStroke(2.dp, InkBlack)
+                .fillMaxWidth()
+                .padding(horizontal = 12.dp, vertical = 10.dp),
+            verticalAlignment = Alignment.CenterVertically
         ) {
-            Row(
-                modifier = Modifier.padding(horizontal = 22.dp, vertical = 12.dp),
-                verticalAlignment = Alignment.CenterVertically,
-                horizontalArrangement = Arrangement.spacedBy(8.dp)
+            Box(
+                modifier = Modifier
+                    .size(34.dp)
+                    .clip(CircleShape)
+                    .background(PureWhite)
+                    .border(1.5.dp, InkBlack, CircleShape),
+                contentAlignment = Alignment.Center
             ) {
-                Text(
-                    text = label,
-                    style = CondensedCardTitleStyle.copy(fontSize = 17.sp),
-                    color = InkBlack
-                )
-                Icon(
-                    imageVector = Icons.AutoMirrored.Filled.ArrowForward,
-                    contentDescription = null,
-                    tint = InkBlack,
-                    modifier = Modifier.size(18.dp)
-                )
+                Icon(icon, contentDescription = null, tint = InkBlack, modifier = Modifier.size(18.dp))
+            }
+            Spacer(modifier = Modifier.width(10.dp))
+            Column {
+                Text(title, style = CondensedCardTitleStyle.copy(fontSize = 12.sp, fontWeight = FontWeight.Black), color = InkBlack)
+                Text(subtitle, style = MaterialTheme.typography.labelSmall.copy(fontSize = 10.sp), color = InkBlack.copy(alpha = 0.7f))
             }
         }
     }
