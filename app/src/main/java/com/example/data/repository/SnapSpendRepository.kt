@@ -17,7 +17,9 @@ import com.example.data.rules.DraftTransaction
 import com.example.data.rules.LocalInsightsAndRulesEngine
 import com.example.data.rules.ResolutionMode
 import com.example.util.MoneyUtils
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.Flow
+import kotlinx.coroutines.withContext
 import org.json.JSONArray
 import org.json.JSONObject
 import java.text.SimpleDateFormat
@@ -41,7 +43,7 @@ class SnapSpendRepository(private val database: SnapSpendDatabase) {
     val budgetsFlow: Flow<List<BudgetEntity>> = dao.observeAllBudgets()
     val repeatingPaymentsFlow: Flow<List<RepeatingPaymentEntity>> = dao.observeAllRepeatingPayments()
 
-    suspend fun ensureDefaultCategoriesSeeded() {
+    suspend fun ensureDefaultCategoriesSeeded() = withContext(Dispatchers.IO) {
         val current = dao.getAllCategoriesOnce()
         if (current.isEmpty()) {
             dao.insertCategoriesIgnore(DefaultCategories.ALL_DEFAULTS)
@@ -57,12 +59,12 @@ class SnapSpendRepository(private val database: SnapSpendDatabase) {
         }
     }
 
-    suspend fun getAllTransactionsOnce(): List<TransactionEntity> = dao.getAllTransactionsOnce()
-    suspend fun getTrashedTransactionsOnce(): List<TransactionEntity> = dao.getTrashedTransactionsOnce()
-    suspend fun getAllCategoriesOnce(): List<CategoryEntity> = dao.getAllCategoriesOnce()
-    suspend fun getAllMerchantMemoriesOnce(): List<MerchantMemoryEntity> = dao.getAllMerchantMemoriesOnce()
-    suspend fun getAllBudgetsOnce(): List<BudgetEntity> = dao.getAllBudgetsOnce()
-    suspend fun getAllRepeatingPaymentsOnce(): List<RepeatingPaymentEntity> = dao.getAllRepeatingPaymentsOnce()
+    suspend fun getAllTransactionsOnce(): List<TransactionEntity> = withContext(Dispatchers.IO) { dao.getAllTransactionsOnce() }
+    suspend fun getTrashedTransactionsOnce(): List<TransactionEntity> = withContext(Dispatchers.IO) { dao.getTrashedTransactionsOnce() }
+    suspend fun getAllCategoriesOnce(): List<CategoryEntity> = withContext(Dispatchers.IO) { dao.getAllCategoriesOnce() }
+    suspend fun getAllMerchantMemoriesOnce(): List<MerchantMemoryEntity> = withContext(Dispatchers.IO) { dao.getAllMerchantMemoriesOnce() }
+    suspend fun getAllBudgetsOnce(): List<BudgetEntity> = withContext(Dispatchers.IO) { dao.getAllBudgetsOnce() }
+    suspend fun getAllRepeatingPaymentsOnce(): List<RepeatingPaymentEntity> = withContext(Dispatchers.IO) { dao.getAllRepeatingPaymentsOnce() }
 
     fun observeTransactionsByDateRange(startDate: Long, endDate: Long) =
         dao.observeTransactionsByDateRange(startDate, endDate)
