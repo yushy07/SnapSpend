@@ -45,6 +45,21 @@ object MoneyUtils {
     }
 
     /**
+     * Converts paise (Long) into an Indian-formatted Rupee string with exact 2-digit paise decimals
+     * (e.g., 123450L -> "₹1,234.50", 2000L -> "₹20.00", 0L -> "₹0.00").
+     */
+    fun formatExactPaise(
+        paise: Long,
+        currencySymbol: String = "₹",
+        showPlusForPositive: Boolean = false
+    ): String = formatPaise(
+        paise = paise,
+        currencySymbol = currencySymbol,
+        showPlusForPositive = showPlusForPositive,
+        forceDecimals = true
+    )
+
+    /**
      * Formats a non-negative whole number using Indian numbering system (e.g., 1,25,000).
      */
     private fun formatIndianNumber(number: Long): String {

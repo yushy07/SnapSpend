@@ -3,6 +3,7 @@ package com.example.ui
 import android.app.Activity
 import android.app.Application
 import android.content.Context
+import android.content.Intent
 import android.content.IntentSender
 import android.net.Uri
 import androidx.lifecycle.AndroidViewModel
@@ -33,11 +34,16 @@ import com.example.data.rules.MonthlyIncomeExpenseBar
 import com.example.data.rules.PeriodComparison
 import com.example.data.rules.PillBarEntry
 import com.example.data.rules.TopMerchantItem
+import com.example.ui.screens.DataCheckMonthRow
+import com.example.ui.screens.DataCheckSnapshot
+import com.example.ui.screens.computeDataCheckMonthBounds
 import com.example.ui.theme.ThemeMode
 import com.example.util.MoneyUtils
 import com.example.util.MonthEndEstimateResult
 import com.example.util.MonthEndMath
 import com.example.util.QuickRepeatChip
+import com.example.util.ShareIntentHelper
+import com.example.util.SharedPayloadResult
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -196,6 +202,12 @@ class SnapSpendViewModel(application: Application) : AndroidViewModel(applicatio
     private val _disabledQuickRepeatKeys = MutableStateFlow<Set<String>>(emptySet())
     val disabledQuickRepeatKeys: StateFlow<Set<String>> = _disabledQuickRepeatKeys.asStateFlow()
 
+    private val _dataCheckSnapshot = MutableStateFlow(DataCheckSnapshot())
+    val dataCheckSnapshot: StateFlow<DataCheckSnapshot> = _dataCheckSnapshot.asStateFlow()
+
+    private val _pendingSharedPayload = MutableStateFlow<SharedPayloadResult?>(null)
+    val pendingSharedPayload: StateFlow<SharedPayloadResult?> = _pendingSharedPayload.asStateFlow()
+
     private var undoActionTokenCounter: Long = 0L
     private var pendingDriveAction: PendingDriveAction = PendingDriveAction.NONE
 
@@ -206,12 +218,63 @@ class SnapSpendViewModel(application: Application) : AndroidViewModel(applicatio
             val thirtyDaysMillis = 30L * 24L * 60L * 60L * 1000L
             repository.purgeExpiredTrash(System.currentTimeMillis() - thirtyDaysMillis)
             repository.refreshRepeatingPayments()
+            refreshDataCheckSnapshot()
             val silentEmail = backupManager.attemptSilentSignIn()
             _backupState.value = backupManager.getBackupState()
             if (!silentEmail.isNullOrBlank()) {
                 DriveBackupAndExportManager.scheduleWeeklyBackupWork(appContext)
             }
         }
+        viewModelScope.launch {
+            combine(
+                repository.transactionsFlow,
+                repository.trashedTransactionsFlow
+            ) { active, trashed -> active.size to trashed.size }.collect {
+                refreshDataCheckSnapshot()
+            }
+        }
+    }
+
+    fun refreshDataCheckSnapshot(nowMillis: Long = System.currentTimeMillis()) {
+        viewModelScope.launch(Dispatchers.IO) {
+            _dataCheckSnapshot.value = loadDataCheckSnapshotFromSql(
+                dao = database.transactionDao(),
+                nowMillis = nowMillis
+            )
+        }
+    }
+
+    /**
+     * Immediately ingests a shared ACTION_SEND / ACTION_SEND_MULTIPLE intent:
+     * - Deletes any temporary cache files from a prior unfinished share (onNewIntent safety).
+     * - Resets any prior scan/review overlay so the new share replaces it cleanly.
+     * - Copies valid file streams to ephemeral cache immediately before temporary URI permissions expire.
+     * - Holds the payload in memory until onboarding and the one-time first-scan notice are completed.
+     */
+    fun onIncomingShareIntent(context: Context, intent: Intent?) {
+        if (!ShareIntentHelper.isShareIntent(intent)) return
+        // If a previous scan/review was still open, reset it before ingesting the new share
+        _scanState.value = ScanUiState.Idle
+        _pendingSharedPayload.value = null
+
+        val payload = ShareIntentHelper.ingestShareIntent(context, intent)
+        if (!payload.userNoticeMessage.isNullOrBlank()) {
+            _toastMessage.value = payload.userNoticeMessage
+        }
+        if (payload.hasValidContent) {
+            _pendingSharedPayload.value = payload
+        }
+    }
+
+    fun consumePendingSharedPayload(): SharedPayloadResult? {
+        val current = _pendingSharedPayload.value
+        _pendingSharedPayload.value = null
+        return current
+    }
+
+    fun cancelPendingSharedPayload() {
+        _pendingSharedPayload.value = null
+        ShareIntentHelper.cleanupActiveShareTempFiles()
     }
 
     private fun loadPersistedThemeMode(): ThemeMode {
@@ -629,6 +692,9 @@ class SnapSpendViewModel(application: Application) : AndroidViewModel(applicatio
                         .thenByDescending { it.timestamp }
                 )
                 _scanState.value = ScanUiState.ReviewReady(sorted)
+                if (_queuedScans.value.isEmpty()) {
+                    ShareIntentHelper.cleanupActiveShareTempFiles()
+                }
             }
             is ExtractionResult.UnreadableOrNoPayments -> {
                 _scanState.value = ScanUiState.Unreadable(
@@ -713,6 +779,9 @@ class SnapSpendViewModel(application: Application) : AndroidViewModel(applicatio
         viewModelScope.launch {
             val summary = repository.commitConfirmedDrafts(current.drafts)
             _scanState.value = ScanUiState.Idle
+            if (_queuedScans.value.isEmpty()) {
+                ShareIntentHelper.cleanupActiveShareTempFiles()
+            }
             val msgParts = mutableListOf<String>()
             if (summary.insertedCount > 0) msgParts.add("${summary.insertedCount} saved")
             if (summary.updatedPendingCount > 0) msgParts.add("${summary.updatedPendingCount} pending updated to final")
@@ -724,6 +793,9 @@ class SnapSpendViewModel(application: Application) : AndroidViewModel(applicatio
 
     fun dismissScanFlow() {
         _scanState.value = ScanUiState.Idle
+        if (_queuedScans.value.isEmpty()) {
+            ShareIntentHelper.cleanupActiveShareTempFiles()
+        }
     }
 
     // --- Manual / Edit / Soft-Delete / Trash / Quick Repeat Transaction Actions ---
@@ -1093,3 +1165,56 @@ private data class Quintuple<A, B, C, D, E>(
     val fourth: D,
     val fifth: E
 )
+
+/**
+ * Computes the complete DataCheckSnapshot using dedicated plain SQL SUM and COUNT queries
+ * straight from TransactionDao—never reusing Home, Charts, or Insights helper functions.
+ * Uses the exact same local-timezone calendar month bounds (00:00:00.000 to 23:59:59.999)
+ * as the Home screen so boundary payments at midnight never trigger a false MISMATCH.
+ */
+suspend fun loadDataCheckSnapshotFromSql(
+    dao: com.example.data.local.TransactionDao,
+    nowMillis: Long = System.currentTimeMillis()
+): DataCheckSnapshot {
+    val totalActive = dao.getDataCheckTotalActiveCount()
+    val successCount = dao.getDataCheckSuccessCount()
+    val pendingCount = dao.getDataCheckPendingCount()
+    val failedCount = dao.getDataCheckFailedCount()
+    val transferCount = dao.getDataCheckTransferCount()
+    val trashedCount = dao.getDataCheckTrashedCount()
+
+    val (thisMonthStart, thisMonthEnd) = computeDataCheckMonthBounds(nowMillis, 0)
+    val thisMonthSpentSql = dao.getDataCheckMonthMoneyOutPaise(thisMonthStart, thisMonthEnd)
+
+    val monthLabelFormat = SimpleDateFormat("MMM yyyy", Locale.US)
+    val monthlyRows = (0 downTo -11).map { monthOffset ->
+        val (mStart, mEnd) = computeDataCheckMonthBounds(nowMillis, monthOffset)
+        val label = monthLabelFormat.format(Date(mStart))
+        val moneyIn = dao.getDataCheckMonthMoneyInPaise(mStart, mEnd)
+        val moneyOut = dao.getDataCheckMonthMoneyOutPaise(mStart, mEnd)
+        val paymentCount = dao.getDataCheckMonthPaymentCount(mStart, mEnd)
+        DataCheckMonthRow(
+            monthLabel = label,
+            startMillis = mStart,
+            endMillis = mEnd,
+            moneyInPaise = moneyIn,
+            moneyOutPaise = moneyOut,
+            paymentCount = paymentCount
+        )
+    }
+
+    val last10Rows = dao.getDataCheckLast10SavedRows()
+
+    return DataCheckSnapshot(
+        totalActiveCount = totalActive,
+        successCount = successCount,
+        pendingCount = pendingCount,
+        failedCount = failedCount,
+        transferCount = transferCount,
+        trashedCount = trashedCount,
+        thisMonthSpentSqlPaise = thisMonthSpentSql,
+        monthlyRows = monthlyRows,
+        last10SavedRows = last10Rows
+    )
+}
+

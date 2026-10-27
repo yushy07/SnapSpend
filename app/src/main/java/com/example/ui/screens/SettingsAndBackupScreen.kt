@@ -27,6 +27,7 @@ import androidx.compose.material.icons.filled.CloudUpload
 import androidx.compose.material.icons.filled.Delete
 import androidx.compose.material.icons.filled.Download
 import androidx.compose.material.icons.filled.Edit
+import androidx.compose.material.icons.filled.FactCheck
 import androidx.compose.material.icons.filled.Layers
 import androidx.compose.material.icons.filled.Restore
 import androidx.compose.material.icons.filled.UploadFile
@@ -114,6 +115,7 @@ fun SettingsAndBackupScreen(
     onDeleteMerchantMemory: (normalizedMerchant: String) -> Unit,
     onOpenOnboardingClick: () -> Unit = {},
     onOpenTrashClick: () -> Unit = {},
+    onOpenDataCheckClick: () -> Unit = {},
     notificationPermissionStatus: String = "ALLOWED",
     onRequestNotificationPermission: () -> Unit = {},
     onOpenAppSettings: () -> Unit = {},
@@ -341,6 +343,76 @@ fun SettingsAndBackupScreen(
                             onClick = onOpenTrashClick,
                             onColoredCard = true,
                             contentDescription = "Open Trash",
+                            size = 40.dp
+                        )
+                    }
+                }
+            }
+        }
+
+        // 2b-datacheck. DATA CHECK row (Pale Lavender 3D Card)
+        item(key = "settings_data_check_card") {
+            Editorial3DLayerBox(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .staggeredScreenEntrance(screenKey = "settings", index = 3)
+                    .testTag("settings_data_check_card"),
+                shape = RoundedCornerShape(22.dp),
+                extrusionColor = InkBlack,
+                extrusionBorderColor = InkBlack,
+                depthX = 4.dp,
+                depthY = 5.dp
+            ) {
+                Surface(
+                    onClick = onOpenDataCheckClick,
+                    modifier = Modifier.fillMaxWidth(),
+                    shape = RoundedCornerShape(22.dp),
+                    color = PaleLavenderTint,
+                    contentColor = InkBlack,
+                    border = BorderStroke(1.8.dp, InkBlack)
+                ) {
+                    Row(
+                        modifier = Modifier.padding(20.dp),
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.SpaceBetween
+                    ) {
+                        Row(
+                            verticalAlignment = Alignment.CenterVertically,
+                            horizontalArrangement = Arrangement.spacedBy(12.dp),
+                            modifier = Modifier.weight(1f)
+                        ) {
+                            Box(
+                                modifier = Modifier
+                                    .size(42.dp)
+                                    .clip(CircleShape)
+                                    .background(PureWhite)
+                                    .border(1.5.dp, InkBlack, CircleShape),
+                                contentAlignment = Alignment.Center
+                            ) {
+                                Icon(
+                                    imageVector = Icons.Default.FactCheck,
+                                    contentDescription = "Data Check",
+                                    tint = InkBlack,
+                                    modifier = Modifier.size(20.dp)
+                                )
+                            }
+                            Column(modifier = Modifier.weight(1f)) {
+                                Text(
+                                    text = "DATA CHECK",
+                                    style = CondensedCardTitleStyle.copy(fontSize = 22.sp),
+                                    color = InkBlack
+                                )
+                                Text(
+                                    text = "Verify SQL counts, 12-month sums & last 10 stored rows",
+                                    style = MaterialTheme.typography.bodySmall.copy(fontWeight = FontWeight.SemiBold),
+                                    color = InkBlack.copy(alpha = 0.85f)
+                                )
+                            }
+                        }
+                        RoundArrowButton(
+                            onClick = onOpenDataCheckClick,
+                            onColoredCard = true,
+                            contentDescription = "Open Data Check",
                             size = 40.dp
                         )
                     }

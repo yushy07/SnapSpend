@@ -130,6 +130,7 @@ import com.example.ui.screens.AiNaturalLanguageNoteDialog
 import com.example.ui.screens.AiReviewDeckOverlay
 import com.example.ui.screens.CategoriesFolderScreen
 import com.example.ui.screens.ChartsAndInsightsScreen
+import com.example.ui.screens.DataCheckScreen
 import com.example.ui.screens.HomeScreen
 import com.example.ui.screens.QuickAddSourceBottomSheet
 import com.example.ui.screens.SettingsAndBackupScreen
@@ -160,6 +161,7 @@ import com.example.ui.theme.ThemeMode
 import com.example.ui.theme.TrueBlackBg
 import com.example.ui.theme.dialogScaleFadeEntrance
 import com.example.util.MoneyUtils
+import com.example.util.ShareIntentHelper
 import com.example.util.configureAppCheck
 import android.provider.MediaStore
 import android.provider.Settings
@@ -219,8 +221,9 @@ class MainActivity : ComponentActivity() {
             window.isNavigationBarContrastEnforced = false
         }
 
-        // Handle Share-to-App intent if launched from Gallery or Files
+        // Clean up any stale temporary share files from a prior app session, then ingest launch share intent
         if (savedInstanceState == null) {
+            ShareIntentHelper.cleanupAllShareCacheDir(this)
             handleIncomingShareIntent(intent)
         }
 
@@ -264,31 +267,10 @@ class MainActivity : ComponentActivity() {
     }
 
     private fun handleIncomingShareIntent(intent: Intent?) {
-        if (intent == null) return
-        when (intent.action) {
-            Intent.ACTION_SEND -> {
-                @Suppress("DEPRECATION")
-                val singleUri = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
-                    intent.getParcelableExtra(Intent.EXTRA_STREAM, Uri::class.java)
-                } else {
-                    intent.getParcelableExtra(Intent.EXTRA_STREAM) as? Uri
-                }
-                if (singleUri != null) {
-                    viewModel.processSelectedUris(listOf(singleUri))
-                }
-            }
-            Intent.ACTION_SEND_MULTIPLE -> {
-                @Suppress("DEPRECATION")
-                val multipleUris = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
-                    intent.getParcelableArrayListExtra(Intent.EXTRA_STREAM, Uri::class.java)
-                } else {
-                    intent.getParcelableArrayListExtra<Uri>(Intent.EXTRA_STREAM)
-                }
-                if (!multipleUris.isNullOrEmpty()) {
-                    viewModel.processSelectedUris(multipleUris)
-                }
-            }
-        }
+        if (intent == null || !ShareIntentHelper.isShareIntent(intent)) return
+        viewModel.onIncomingShareIntent(this, intent)
+        // Clear share action on the stored activity intent so config changes do not re-trigger it
+        intent.action = Intent.ACTION_MAIN
     }
 }
 
@@ -311,12 +293,15 @@ fun SnapSpendRootScreen(
     val pendingConsentSender by viewModel.pendingConsentIntentSender.collectAsStateWithLifecycle()
     val toastMessage by viewModel.toastMessage.collectAsStateWithLifecycle()
     val undoBannerState by viewModel.undoBannerState.collectAsStateWithLifecycle()
+    val dataCheckSnapshot by viewModel.dataCheckSnapshot.collectAsStateWithLifecycle()
+    val pendingSharedPayload by viewModel.pendingSharedPayload.collectAsStateWithLifecycle()
 
     val hasSeenAiScanNotice by snapSpendPrefs.hasSeenAiScanNoticeFlow.collectAsStateWithLifecycle(initialValue = false)
     val hasPromptedBudgetNotifications by snapSpendPrefs.hasPromptedBudgetNotificationsFlow.collectAsStateWithLifecycle(initialValue = false)
 
     var showOnboardingReplay by rememberSaveable { mutableStateOf(false) }
     var showTrashScreen by rememberSaveable { mutableStateOf(false) }
+    var showDataCheckScreen by rememberSaveable { mutableStateOf(false) }
     var showBeforeFirstScanDialog by rememberSaveable { mutableStateOf(false) }
     var pendingScanAction by remember { mutableStateOf<(() -> Unit)?>(null) }
 
@@ -372,6 +357,19 @@ fun SnapSpendRootScreen(
         }
     }
 
+    // Resume any shared item held in memory once onboarding is complete, gated behind the first-scan notice
+    LaunchedEffect(pendingSharedPayload) {
+        val payload = pendingSharedPayload ?: return@LaunchedEffect
+        val consumed = viewModel.consumePendingSharedPayload() ?: return@LaunchedEffect
+        performWithFirstScanNoticeCheck {
+            if (consumed.tempFileUris.isNotEmpty()) {
+                viewModel.processSelectedUris(consumed.tempFileUris)
+            } else if (!consumed.sharedTextNote.isNullOrBlank()) {
+                viewModel.processNaturalLanguageNoteWithGemini(consumed.sharedTextNote)
+            }
+        }
+    }
+
     val initialTab = remember {
         if (activity.intent?.getStringExtra("TARGET_TAB") == "CATEGORIES") {
             SnapSpendTab.CATEGORIES
@@ -389,7 +387,7 @@ fun SnapSpendRootScreen(
     var samplePresetCounter by rememberSaveable { mutableIntStateOf(0) }
 
     // BackHandler on non-Home tabs to return cleanly to Home
-    if (currentTab != SnapSpendTab.HOME && scanState is ScanUiState.Idle && !showTrashScreen) {
+    if (currentTab != SnapSpendTab.HOME && scanState is ScanUiState.Idle && !showTrashScreen && !showDataCheckScreen) {
         BackHandler {
             currentTab = SnapSpendTab.HOME
         }
@@ -634,6 +632,7 @@ fun SnapSpendRootScreen(
                                 onTabSelected = {
                                     if (it != SnapSpendTab.SETTINGS) {
                                         showTrashScreen = false
+                                        showDataCheckScreen = false
                                     }
                                     currentTab = it
                                 },
@@ -821,6 +820,17 @@ fun SnapSpendRootScreen(
                                             topContentPadding = topContentPadding,
                                             bottomContentPadding = bottomContentPadding
                                         )
+                                    } else if (showDataCheckScreen) {
+                                        DataCheckScreen(
+                                            snapshot = dataCheckSnapshot,
+                                            homeThisMonthSpentPaise = uiState.thisMonthSpentPaise,
+                                            onBackClick = { showDataCheckScreen = false },
+                                            onReportCopied = {
+                                                viewModel.showToast("Data check report copied to clipboard!")
+                                            },
+                                            topContentPadding = topContentPadding,
+                                            bottomContentPadding = bottomContentPadding
+                                        )
                                     } else {
                                         SettingsAndBackupScreen(
                                             uiState = uiState,
@@ -862,6 +872,10 @@ fun SnapSpendRootScreen(
                                             },
                                             onOpenTrashClick = {
                                                 showTrashScreen = true
+                                            },
+                                            onOpenDataCheckClick = {
+                                                viewModel.refreshDataCheckSnapshot()
+                                                showDataCheckScreen = true
                                             },
                                             notificationPermissionStatus = notificationPermissionStatus,
                                             onRequestNotificationPermission = {
@@ -1175,6 +1189,7 @@ fun SnapSpendRootScreen(
             onDismiss = {
                 showBeforeFirstScanDialog = false
                 pendingScanAction = null
+                viewModel.cancelPendingSharedPayload()
             },
             onConfirm = {
                 showBeforeFirstScanDialog = false

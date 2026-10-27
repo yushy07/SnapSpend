@@ -309,6 +309,64 @@ interface TransactionDao {
 
     @Query("DELETE FROM transactions")
     suspend fun clearAllTransactions()
+
+    // --- Independent Plain SQL Queries for Data Check Screen (Never reuses Home/Charts/Insights logic) ---
+    @Query("SELECT COUNT(*) FROM transactions WHERE deletedAtMillis IS NULL")
+    suspend fun getDataCheckTotalActiveCount(): Int
+
+    @Query("SELECT COUNT(*) FROM transactions WHERE deletedAtMillis IS NULL AND status = 'SUCCESS' AND type != 'TRANSFER'")
+    suspend fun getDataCheckSuccessCount(): Int
+
+    @Query("SELECT COUNT(*) FROM transactions WHERE deletedAtMillis IS NULL AND status = 'PENDING' AND type != 'TRANSFER'")
+    suspend fun getDataCheckPendingCount(): Int
+
+    @Query("SELECT COUNT(*) FROM transactions WHERE deletedAtMillis IS NULL AND status = 'FAILED' AND type != 'TRANSFER'")
+    suspend fun getDataCheckFailedCount(): Int
+
+    @Query("SELECT COUNT(*) FROM transactions WHERE deletedAtMillis IS NULL AND type = 'TRANSFER'")
+    suspend fun getDataCheckTransferCount(): Int
+
+    @Query("SELECT COUNT(*) FROM transactions WHERE deletedAtMillis IS NOT NULL")
+    suspend fun getDataCheckTrashedCount(): Int
+
+    @Query(
+        """
+        SELECT COALESCE(SUM(amountPaise), 0)
+        FROM transactions
+        WHERE deletedAtMillis IS NULL
+          AND status = 'SUCCESS'
+          AND type = 'EARNING'
+          AND timestamp BETWEEN :startMillis AND :endMillis
+        """
+    )
+    suspend fun getDataCheckMonthMoneyInPaise(startMillis: Long, endMillis: Long): Long
+
+    @Query(
+        """
+        SELECT COALESCE(SUM(amountPaise), 0)
+        FROM transactions
+        WHERE deletedAtMillis IS NULL
+          AND status = 'SUCCESS'
+          AND type = 'EXPENSE'
+          AND timestamp BETWEEN :startMillis AND :endMillis
+        """
+    )
+    suspend fun getDataCheckMonthMoneyOutPaise(startMillis: Long, endMillis: Long): Long
+
+    @Query(
+        """
+        SELECT COUNT(*)
+        FROM transactions
+        WHERE deletedAtMillis IS NULL
+          AND status = 'SUCCESS'
+          AND type != 'TRANSFER'
+          AND timestamp BETWEEN :startMillis AND :endMillis
+        """
+    )
+    suspend fun getDataCheckMonthPaymentCount(startMillis: Long, endMillis: Long): Int
+
+    @Query("SELECT * FROM transactions WHERE deletedAtMillis IS NULL ORDER BY id DESC LIMIT 10")
+    suspend fun getDataCheckLast10SavedRows(): List<TransactionEntity>
 }
 
 @Dao
