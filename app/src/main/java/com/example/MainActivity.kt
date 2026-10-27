@@ -177,6 +177,9 @@ import com.example.ui.screens.OnboardingCarouselScreen
 import com.example.ui.components.BeforeFirstScanDisclosureDialog
 import com.example.ui.components.NotificationPermissionRationaleDialog
 import com.example.ui.components.AppSettingsRedirectDialog
+import com.example.ui.sound.LocalRetroSoundManager
+import com.example.ui.sound.RetroSoundManager
+import androidx.compose.runtime.CompositionLocalProvider
 import java.io.File
 import kotlin.math.roundToInt
 import kotlinx.coroutines.delay
@@ -234,28 +237,41 @@ class MainActivity : ComponentActivity() {
             val hasSeenOnboarding by snapSpendPrefs.hasSeenOnboardingFlow.collectAsStateWithLifecycle(initialValue = null)
             val coroutineScope = rememberCoroutineScope()
 
-            SnapSpendTheme(themeMode = themeMode) {
-                if (hasSeenOnboarding == false) {
-                    OnboardingCarouselScreen(
-                        onFinish = {
-                            coroutineScope.launch {
-                                snapSpendPrefs.setHasSeenOnboarding(true)
+            val soundManager = remember { RetroSoundManager(this@MainActivity) }
+            DisposableEffect(Unit) {
+                onDispose {
+                    soundManager.release()
+                }
+            }
+            val soundEffectsEnabled by viewModel.soundEffectsEnabled.collectAsStateWithLifecycle()
+            androidx.compose.runtime.LaunchedEffect(soundEffectsEnabled) {
+                soundManager.setEnabled(soundEffectsEnabled)
+            }
+
+            CompositionLocalProvider(LocalRetroSoundManager provides soundManager) {
+                SnapSpendTheme(themeMode = themeMode) {
+                    if (hasSeenOnboarding == false) {
+                        OnboardingCarouselScreen(
+                            onFinish = {
+                                coroutineScope.launch {
+                                    snapSpendPrefs.setHasSeenOnboarding(true)
+                                }
                             }
-                        }
-                    )
-                } else if (hasSeenOnboarding == true) {
-                    SnapSpendRootScreen(
-                        viewModel = viewModel,
-                        themeMode = themeMode,
-                        activity = this@MainActivity,
-                        snapSpendPrefs = snapSpendPrefs
-                    )
-                } else {
-                    Box(
-                        modifier = Modifier
-                            .fillMaxSize()
-                            .background(SnapSpendThemeTokens.colors.appBackground)
-                    )
+                        )
+                    } else if (hasSeenOnboarding == true) {
+                        SnapSpendRootScreen(
+                            viewModel = viewModel,
+                            themeMode = themeMode,
+                            activity = this@MainActivity,
+                            snapSpendPrefs = snapSpendPrefs
+                        )
+                    } else {
+                        Box(
+                            modifier = Modifier
+                                .fillMaxSize()
+                                .background(SnapSpendThemeTokens.colors.appBackground)
+                        )
+                    }
                 }
             }
         }
@@ -285,6 +301,7 @@ fun SnapSpendRootScreen(
     val tokens = SnapSpendThemeTokens.colors
     val isDark = tokens.isDark
     val coroutineScope = rememberCoroutineScope()
+    val soundManager = LocalRetroSoundManager.current
 
     val uiState by viewModel.uiState.collectAsStateWithLifecycle()
     val scanState by viewModel.scanState.collectAsStateWithLifecycle()
@@ -296,6 +313,15 @@ fun SnapSpendRootScreen(
     val undoBannerState by viewModel.undoBannerState.collectAsStateWithLifecycle()
     val dataCheckSnapshot by viewModel.dataCheckSnapshot.collectAsStateWithLifecycle()
     val pendingSharedPayload by viewModel.pendingSharedPayload.collectAsStateWithLifecycle()
+    val soundEffectsEnabled by viewModel.soundEffectsEnabled.collectAsStateWithLifecycle()
+
+    androidx.compose.runtime.LaunchedEffect(scanState) {
+        when (scanState) {
+            is ScanUiState.ReviewReady -> soundManager?.playSuccess()
+            is ScanUiState.Error, is ScanUiState.Unreadable -> soundManager?.playError()
+            else -> {}
+        }
+    }
 
     val hasSeenAiScanNotice by snapSpendPrefs.hasSeenAiScanNoticeFlow.collectAsStateWithLifecycle(initialValue = false)
     val hasPromptedBudgetNotifications by snapSpendPrefs.hasPromptedBudgetNotificationsFlow.collectAsStateWithLifecycle(initialValue = false)
@@ -625,7 +651,10 @@ fun SnapSpendRootScreen(
                                     EditorialAquaUndoBar(
                                         banner = banner,
                                         isDark = isDark,
-                                        onUndoClick = viewModel::performUndo
+                                        onUndoClick = {
+                                            soundManager?.playSuccess()
+                                            viewModel.performUndo()
+                                        }
                                     )
                                 }
                             }
@@ -720,6 +749,7 @@ fun SnapSpendRootScreen(
                                             showBudgetSetupDialog = true
                                         },
                                         onQuickRepeatTap = { chip ->
+                                            soundManager?.playCoin()
                                             viewModel.tapQuickRepeatChip(chip)
                                         },
                                         onQuickRepeatLongPress = { chip ->
@@ -837,9 +867,18 @@ fun SnapSpendRootScreen(
                                     if (showTrashScreen) {
                                         TrashScreen(
                                             trashedTransactions = uiState.trashedTransactions,
-                                            onRestoreTransaction = viewModel::restoreFromTrash,
-                                            onDeleteForeverTransaction = viewModel::deleteForeverFromTrash,
-                                            onEmptyTrash = viewModel::emptyTrash,
+                                            onRestoreTransaction = { id ->
+                                                soundManager?.playSuccess()
+                                                viewModel.restoreFromTrash(id)
+                                            },
+                                            onDeleteForeverTransaction = { id ->
+                                                soundManager?.playDelete()
+                                                viewModel.deleteForeverFromTrash(id)
+                                            },
+                                            onEmptyTrash = {
+                                                soundManager?.playDelete()
+                                                viewModel.emptyTrash()
+                                            },
                                             onBackClick = { showTrashScreen = false },
                                             topContentPadding = topContentPadding,
                                             bottomContentPadding = bottomContentPadding
@@ -862,6 +901,8 @@ fun SnapSpendRootScreen(
                                             isBackupBusy = isBackupBusy,
                                             themeMode = themeMode,
                                             onThemeModeChange = viewModel::setThemeMode,
+                                            soundEffectsEnabled = soundEffectsEnabled,
+                                            onSoundEffectsEnabledChange = viewModel::setSoundEffectsEnabled,
                                             onConnectGoogleClick = { viewModel.connectGoogleAccount(activity) },
                                             onDisconnectGoogleClick = viewModel::disconnectGoogleAccount,
                                             onBackupNowClick = viewModel::triggerDriveBackupNow,
@@ -962,6 +1003,7 @@ fun SnapSpendRootScreen(
                 onApplyEqualSplit = viewModel::applyDraftEqualSplit,
                 onToggleLineItem = viewModel::toggleDraftLineItem,
                 onConfirmAll = {
+                    soundManager?.playCoin()
                     viewModel.confirmAllReviewDrafts()
                 }
             )
@@ -1062,9 +1104,11 @@ fun SnapSpendRootScreen(
             categories = uiState.categories,
             onDismiss = { showTransactionEditor = false },
             onSave = { tx, learnMerchant ->
+                soundManager?.playCoin()
                 viewModel.saveManualOrEditedTransaction(tx, learnMerchant)
             },
             onDelete = { id ->
+                soundManager?.playDelete()
                 viewModel.deleteTransaction(id)
             }
         )
@@ -1296,6 +1340,7 @@ private fun EditorialBottomNavBar(
     val view = LocalView.current
     val density = LocalDensity.current
     val reducedMotion = LocalReducedMotion.current
+    val soundManager = LocalRetroSoundManager.current
     val tabs = SnapSpendTab.entries
     val selectedIndex = tabs.indexOf(currentTab).coerceAtLeast(0)
 
@@ -1485,6 +1530,7 @@ private fun EditorialBottomNavBar(
                                         role = Role.Tab
                                     ) {
                                         Motion.performLightTapHaptic(view)
+                                        soundManager?.playButtonBlip()
                                         onTabSelected(tab)
                                     }
                                     .testTag(tab.testTag),
@@ -1548,6 +1594,7 @@ private fun QuickAddFloatingPillButton(
 ) {
     val view = LocalView.current
     val reducedMotion = LocalReducedMotion.current
+    val soundManager = LocalRetroSoundManager.current
     val interactionSource = remember { MutableInteractionSource() }
     val isPressed by interactionSource.collectIsPressedAsState()
     val pillShape = CircleShape
@@ -1562,6 +1609,7 @@ private fun QuickAddFloatingPillButton(
         Surface(
             onClick = {
                 Motion.performLightTapHaptic(view)
+                soundManager?.playButtonBlip()
                 onClick()
             },
             interactionSource = interactionSource,

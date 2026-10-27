@@ -21,6 +21,8 @@ import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.automirrored.filled.VolumeOff
+import androidx.compose.material.icons.automirrored.filled.VolumeUp
 import androidx.compose.material.icons.filled.Add
 import androidx.compose.material.icons.filled.CloudDone
 import androidx.compose.material.icons.filled.CloudUpload
@@ -43,6 +45,7 @@ import androidx.compose.material3.OutlinedTextFieldDefaults
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
+import com.example.ui.sound.LocalRetroSoundManager
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
@@ -103,6 +106,8 @@ fun SettingsAndBackupScreen(
     isBackupBusy: Boolean,
     themeMode: ThemeMode = ThemeMode.SYSTEM,
     onThemeModeChange: (ThemeMode) -> Unit = {},
+    soundEffectsEnabled: Boolean = true,
+    onSoundEffectsEnabledChange: (Boolean) -> Unit = {},
     onConnectGoogleClick: () -> Unit,
     onDisconnectGoogleClick: () -> Unit,
     onBackupNowClick: () -> Unit,
@@ -212,6 +217,148 @@ fun SettingsAndBackupScreen(
                             onOptionSelected = onThemeModeChange,
                             optionTestTagProvider = { "theme_option_${it.name.lowercase()}" }
                         )
+                    }
+                }
+            }
+        }
+
+        // 2a. Sound Effects Card (Enabled / Muted + Preview Chips) on Pale Mint Tint with Black Outline
+        item(key = "settings_sound_effects_card") {
+            val soundManager = LocalRetroSoundManager.current
+            Editorial3DLayerBox(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .staggeredScreenEntrance(screenKey = "settings", index = 2)
+                    .testTag("sound_effects_card"),
+                shape = RoundedCornerShape(28.dp),
+                extrusionColor = InkBlack,
+                extrusionBorderColor = InkBlack,
+                depthX = 4.dp,
+                depthY = 6.dp
+            ) {
+                Surface(
+                    modifier = Modifier.fillMaxWidth(),
+                    shape = RoundedCornerShape(28.dp),
+                    color = PaleMintTint,
+                    contentColor = InkBlack,
+                    border = BorderStroke(
+                        width = 1.8.dp,
+                        color = InkBlack
+                    )
+                ) {
+                    Column(modifier = Modifier.padding(22.dp)) {
+                        Row(
+                            modifier = Modifier.fillMaxWidth(),
+                            horizontalArrangement = Arrangement.SpaceBetween,
+                            verticalAlignment = Alignment.CenterVertically
+                        ) {
+                            Column(modifier = Modifier.weight(1f)) {
+                                TinySectionLabel(
+                                    text = "RETRO AUDIO FEEDBACK",
+                                    color = InkBlack.copy(alpha = 0.72f)
+                                )
+                                Spacer(modifier = Modifier.height(4.dp))
+                                Text(
+                                    text = "SOUND EFFECTS",
+                                    style = CondensedCardTitleStyle.copy(fontSize = 26.sp),
+                                    color = InkBlack
+                                )
+                            }
+                            Box(
+                                modifier = Modifier
+                                    .size(42.dp)
+                                    .clip(CircleShape)
+                                    .background(if (soundEffectsEnabled) SunnyYellow else Color(0xFFD6D6DF))
+                                    .border(BorderStroke(1.8.dp, InkBlack), CircleShape),
+                                contentAlignment = Alignment.Center
+                            ) {
+                                Icon(
+                                    imageVector = if (soundEffectsEnabled) Icons.AutoMirrored.Filled.VolumeUp else Icons.AutoMirrored.Filled.VolumeOff,
+                                    contentDescription = if (soundEffectsEnabled) "Sound effects active" else "Sound effects muted",
+                                    tint = InkBlack,
+                                    modifier = Modifier.size(22.dp)
+                                )
+                            }
+                        }
+                        Text(
+                            text = "Playful 8-bit retro arcade blips, coin chimes & drop warps",
+                            style = MaterialTheme.typography.bodySmall.copy(fontWeight = FontWeight.SemiBold),
+                            color = InkBlack.copy(alpha = 0.80f)
+                        )
+                        Spacer(modifier = Modifier.height(14.dp))
+                        SegmentedPillToggle(
+                            options = listOf(true, false),
+                            selectedOption = soundEffectsEnabled,
+                            labelProvider = { if (it) "ON (ARCADE)" else "MUTED" },
+                            onOptionSelected = { enabled ->
+                                onSoundEffectsEnabledChange(enabled)
+                                if (enabled) {
+                                    soundManager?.playCoin()
+                                }
+                            },
+                            optionTestTagProvider = { if (it) "sound_option_enabled" else "sound_option_muted" }
+                        )
+
+                        Spacer(modifier = Modifier.height(14.dp))
+                        Text(
+                            text = "TAP TO TEST SOUNDS",
+                            style = MaterialTheme.typography.labelSmall.copy(fontWeight = FontWeight.Black, letterSpacing = 1.sp),
+                            color = InkBlack.copy(alpha = 0.75f)
+                        )
+                        Spacer(modifier = Modifier.height(8.dp))
+                        Row(
+                            modifier = Modifier.fillMaxWidth(),
+                            horizontalArrangement = Arrangement.spacedBy(8.dp)
+                        ) {
+                            // Test Coin
+                            Surface(
+                                onClick = { soundManager?.playCoin() },
+                                shape = CircleShape,
+                                color = SunnyYellow,
+                                contentColor = InkBlack,
+                                border = BorderStroke(1.5.dp, InkBlack),
+                                modifier = Modifier
+                                    .weight(1f)
+                                    .height(38.dp)
+                                    .testTag("test_sound_coin")
+                            ) {
+                                Box(contentAlignment = Alignment.Center) {
+                                    Text("COIN", style = MaterialTheme.typography.labelSmall.copy(fontWeight = FontWeight.Black))
+                                }
+                            }
+                            // Test Blip
+                            Surface(
+                                onClick = { soundManager?.playButtonBlip() },
+                                shape = CircleShape,
+                                color = EditorialAqua,
+                                contentColor = InkBlack,
+                                border = BorderStroke(1.5.dp, InkBlack),
+                                modifier = Modifier
+                                    .weight(1f)
+                                    .height(38.dp)
+                                    .testTag("test_sound_blip")
+                            ) {
+                                Box(contentAlignment = Alignment.Center) {
+                                    Text("BLIP", style = MaterialTheme.typography.labelSmall.copy(fontWeight = FontWeight.Black))
+                                }
+                            }
+                            // Test Warp
+                            Surface(
+                                onClick = { soundManager?.playDelete() },
+                                shape = CircleShape,
+                                color = EditorialCoral,
+                                contentColor = InkBlack,
+                                border = BorderStroke(1.5.dp, InkBlack),
+                                modifier = Modifier
+                                    .weight(1f)
+                                    .height(38.dp)
+                                    .testTag("test_sound_delete")
+                            ) {
+                                Box(contentAlignment = Alignment.Center) {
+                                    Text("WARP", style = MaterialTheme.typography.labelSmall.copy(fontWeight = FontWeight.Black))
+                                }
+                            }
+                        }
                     }
                 }
             }

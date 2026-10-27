@@ -22,6 +22,7 @@ class SnapSpendPreferences(private val context: Context) {
         val KEY_HAS_SEEN_ONBOARDING = booleanPreferencesKey("has_seen_onboarding")
         val KEY_HAS_SEEN_AI_SCAN_NOTICE = booleanPreferencesKey("has_seen_ai_scan_notice")
         val KEY_HAS_PROMPTED_BUDGET_NOTIFICATIONS = booleanPreferencesKey("has_prompted_budget_notifications")
+        val KEY_SOUND_EFFECTS_ENABLED = booleanPreferencesKey("sound_effects_enabled")
     }
 
     val hasSeenOnboardingFlow: Flow<Boolean> = context.snapSpendDataStore.data.map { prefs ->
@@ -51,6 +52,16 @@ class SnapSpendPreferences(private val context: Context) {
     suspend fun setHasPromptedBudgetNotifications(hasPrompted: Boolean) {
         context.snapSpendDataStore.edit { prefs ->
             prefs[KEY_HAS_PROMPTED_BUDGET_NOTIFICATIONS] = hasPrompted
+        }
+    }
+
+    val soundEffectsEnabledFlow: Flow<Boolean> = context.snapSpendDataStore.data.map { prefs ->
+        prefs[KEY_SOUND_EFFECTS_ENABLED] ?: true
+    }
+
+    suspend fun setSoundEffectsEnabled(enabled: Boolean) {
+        context.snapSpendDataStore.edit { prefs ->
+            prefs[KEY_SOUND_EFFECTS_ENABLED] = enabled
         }
     }
 }

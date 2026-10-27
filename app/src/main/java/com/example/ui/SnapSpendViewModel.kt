@@ -186,6 +186,9 @@ class SnapSpendViewModel(application: Application) : AndroidViewModel(applicatio
     private val _themeMode = MutableStateFlow(loadPersistedThemeMode())
     val themeMode: StateFlow<ThemeMode> = _themeMode.asStateFlow()
 
+    private val _soundEffectsEnabled = MutableStateFlow(loadPersistedSoundEffectsEnabled())
+    val soundEffectsEnabled: StateFlow<Boolean> = _soundEffectsEnabled.asStateFlow()
+
     private val _queuedScans = MutableStateFlow<List<QueuedScanTask>>(emptyList())
     val queuedScans: StateFlow<List<QueuedScanTask>> = _queuedScans.asStateFlow()
 
@@ -307,6 +310,19 @@ class SnapSpendViewModel(application: Application) : AndroidViewModel(applicatio
     fun toggleDarkLightQuickly(currentlyDark: Boolean) {
         val next = if (currentlyDark) ThemeMode.LIGHT else ThemeMode.DARK
         setThemeMode(next)
+    }
+
+    private fun loadPersistedSoundEffectsEnabled(): Boolean {
+        return prefs.getBoolean("sound_effects_enabled", true)
+    }
+
+    fun setSoundEffectsEnabled(enabled: Boolean) {
+        _soundEffectsEnabled.value = enabled
+        prefs.edit().putBoolean("sound_effects_enabled", enabled).apply()
+    }
+
+    fun toggleSoundEffectsEnabled() {
+        setSoundEffectsEnabled(!_soundEffectsEnabled.value)
     }
 
     private val coreDataFlow = combine(

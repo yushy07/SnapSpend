@@ -7,6 +7,7 @@ import androidx.activity.compose.BackHandler
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.animation.AnimatedContent
+import com.example.ui.sound.LocalRetroSoundManager
 import androidx.compose.animation.core.Animatable
 import androidx.compose.animation.core.FastOutSlowInEasing
 import androidx.compose.animation.core.LinearEasing
@@ -760,6 +761,7 @@ fun SmartCashLogDialog(
     val isDark = tokens.isDark
     val context = LocalContext.current
     val view = LocalView.current
+    val soundManager = LocalRetroSoundManager.current
 
     var noteText by remember { mutableStateOf("") }
     var selectedCashType by remember { mutableStateOf(TransactionType.EXPENSE) }
@@ -918,6 +920,7 @@ fun SmartCashLogDialog(
                             Surface(
                                 onClick = {
                                     Motion.performLightTapHaptic(view)
+                                    soundManager?.playButtonBlip()
                                     noteText = applyQuickAmountToCashNote(noteText, rupees)
                                 },
                                 shape = CircleShape,
@@ -1001,6 +1004,7 @@ fun SmartCashLogDialog(
             Button(
                 onClick = {
                     if (noteText.isNotBlank()) {
+                        soundManager?.playButtonBlip()
                         onSubmitCashNote(noteText.trim(), selectedCashType)
                         onDismiss()
                     }

@@ -2,6 +2,7 @@ package com.example.ui.components
 
 import androidx.compose.animation.AnimatedContent
 import androidx.compose.animation.AnimatedVisibility
+import com.example.ui.sound.LocalRetroSoundManager
 import androidx.compose.animation.animateColorAsState
 import androidx.compose.animation.animateContentSize
 import androidx.compose.animation.core.Animatable
@@ -1455,6 +1456,7 @@ fun SegmentedPillToggle(
 ) {
     val view = LocalView.current
     val reducedMotion = LocalReducedMotion.current
+    val soundManager = LocalRetroSoundManager.current
     val safeSelectedIndex = selectedIndex.coerceIn(0, (options.size - 1).coerceAtLeast(0))
 
     Editorial3DLayerBox(
@@ -1518,6 +1520,7 @@ fun SegmentedPillToggle(
                                 .clip(CircleShape)
                                 .clickable(role = Role.Tab) {
                                     Motion.performLightTapHaptic(view)
+                                    soundManager?.playButtonBlip()
                                     onOptionSelected(index)
                                 }
                                 .padding(horizontal = 8.dp)
