@@ -91,6 +91,7 @@ fun ChartsAndInsightsScreen(
     onSaveBudget: (categoryName: String, limitPaise: Long) -> Unit,
     onRepeatingStateChange: (id: String, state: RepeatingState) -> Unit,
     onSetBudgetClick: () -> Unit = {},
+    onTransactionClick: (com.example.data.local.TransactionEntity) -> Unit = {},
     topContentPadding: Dp = 8.dp,
     bottomContentPadding: Dp = 120.dp,
     modifier: Modifier = Modifier
@@ -101,8 +102,18 @@ fun ChartsAndInsightsScreen(
     var activeSubTab by rememberSaveable { mutableStateOf(ChartsSubTab.OVERVIEW) }
     var selectedCategoryDropdownLabel by rememberSaveable { mutableStateOf("All Categories") }
 
-    val rangeSpentPaise = uiState.chartCategorySlices.sumOf { it.amountPaise }
-        .takeIf { it > 0L } ?: uiState.thisMonthSpentPaise
+    val availableCategoryNames = uiState.chartCategorySlices.map { it.categoryName }
+    val activeCategoryFilter = selectedCategoryDropdownLabel.takeIf {
+        it != "All Categories" && it in availableCategoryNames
+    }
+    val displayedCategorySlices = if (activeCategoryFilter != null) {
+        uiState.chartCategorySlices.filter { it.categoryName == activeCategoryFilter }
+    } else {
+        uiState.chartCategorySlices
+    }
+
+    val rangeSpentPaise = displayedCategorySlices.sumOf { it.amountPaise }
+        .takeIf { it > 0L || activeCategoryFilter != null } ?: uiState.thisMonthSpentPaise
 
     val daysDivisor = when (uiState.chartDateRange) {
         DateRangeFilter.THIS_WEEK -> 7L
@@ -113,20 +124,24 @@ fun ChartsAndInsightsScreen(
     }
     val avgPerDayPaise = (rangeSpentPaise / daysDivisor).coerceAtLeast(0L)
 
-    // Compute local math delta string for the black delta pills (zero hardcoded pre-fed percentages)
-    val momComparison = uiState.periodComparisons.firstOrNull()
-    val momDiff: Int? = momComparison?.deltaPercent
-    val hasAnyPeriodSpend = rangeSpentPaise > 0L || (momComparison?.previousSpentPaise ?: 0L) > 0L
+    // Compute local math delta string for the black delta pills matching the active date range
+    val periodComparisonForRange = when (uiState.chartDateRange) {
+        DateRangeFilter.THIS_WEEK -> uiState.periodComparisons.firstOrNull { it.title.contains("Week", ignoreCase = true) }
+        DateRangeFilter.THIS_YEAR -> uiState.periodComparisons.firstOrNull { it.title.contains("Year", ignoreCase = true) }
+        else -> uiState.periodComparisons.firstOrNull { it.title.contains("Month", ignoreCase = true) }
+    } ?: uiState.periodComparisons.firstOrNull()
+    val periodDiff: Int? = periodComparisonForRange?.deltaPercent
+    val hasAnyPeriodSpend = rangeSpentPaise > 0L || (periodComparisonForRange?.previousSpentPaise ?: 0L) > 0L
     val totalDeltaPillText = when {
         !hasAnyPeriodSpend -> "–"
-        momDiff != null && momDiff > 0 -> "↑ ${momDiff}%"
-        momDiff != null && momDiff < 0 -> "↓ ${abs(momDiff)}%"
+        periodDiff != null && periodDiff > 0 -> "↑ ${periodDiff}%"
+        periodDiff != null && periodDiff < 0 -> "↓ ${abs(periodDiff)}%"
         else -> "0%"
     }
     val avgDeltaPillText = when {
         !hasAnyPeriodSpend -> "–"
-        momDiff != null && momDiff > 0 -> "↑ ${momDiff}%"
-        momDiff != null && momDiff < 0 -> "↓ ${abs(momDiff)}%"
+        periodDiff != null && periodDiff > 0 -> "↑ ${periodDiff}%"
+        periodDiff != null && periodDiff < 0 -> "↓ ${abs(periodDiff)}%"
         else -> "0%"
     }
 
@@ -179,10 +194,10 @@ fun ChartsAndInsightsScreen(
                         testTag = "charts_date_range_dropdown"
                     )
                     WhitePillDropdown(
-                        label = selectedCategoryDropdownLabel,
+                        label = activeCategoryFilter ?: "All Categories",
                         onClick = {
-                            val options = listOf("All Categories") + uiState.chartCategorySlices.map { it.categoryName }
-                            val currentIdx = options.indexOf(selectedCategoryDropdownLabel).coerceAtLeast(0)
+                            val options = listOf("All Categories") + availableCategoryNames
+                            val currentIdx = options.indexOf(activeCategoryFilter ?: "All Categories").coerceAtLeast(0)
                             selectedCategoryDropdownLabel = options[(currentIdx + 1) % options.size]
                         },
                         modifier = Modifier.weight(1f),
@@ -325,7 +340,7 @@ fun ChartsAndInsightsScreen(
                                 )
                                 Spacer(modifier = Modifier.height(18.dp))
                                 EditorialDonutChart(
-                                    slices = uiState.chartCategorySlices,
+                                    slices = displayedCategorySlices,
                                     totalSpentPaise = rangeSpentPaise,
                                     onBrightCard = true,
                                     isOnDarkSurface = false
@@ -484,7 +499,9 @@ fun ChartsAndInsightsScreen(
 
                 // 3. 3D This Month vs Last Month Comparison Card (Sunny Yellow #FFD23F with black text)
                 item(key = "trends_mom_comparison") {
-                    val mom = uiState.periodComparisons.firstOrNull()
+                    val mom = uiState.periodComparisons.firstOrNull {
+                        it.title.contains("Month", ignoreCase = true)
+                    } ?: uiState.periodComparisons.firstOrNull()
                     val diffPct: Int? = mom?.deltaPercent
                     val momHeadline = when {
                         diffPct == null -> "FIRST MONTH TRACKED"
@@ -620,7 +637,9 @@ fun ChartsAndInsightsScreen(
                             Box(modifier = Modifier.height(680.dp)) {
                                 CategoriesFolderScreen(
                                     uiState = uiState,
-                                    onSaveBudget = onSaveBudget
+                                    onSaveBudget = onSaveBudget,
+                                    onTransactionClick = onTransactionClick,
+                                    bottomContentPadding = 24.dp
                                 )
                             }
                         }

@@ -34,6 +34,8 @@ class SnapSpendRepository(private val database: SnapSpendDatabase) {
     private val dao = database.dao()
 
     val transactionsFlow: Flow<List<TransactionEntity>> = dao.observeAllTransactions()
+    val trashedTransactionsFlow: Flow<List<TransactionEntity>> = dao.observeTrashedTransactions()
+    val trashedCountFlow: Flow<Int> = dao.observeTrashedCount()
     val categoriesFlow: Flow<List<CategoryEntity>> = dao.observeAllCategories()
     val merchantMemoriesFlow: Flow<List<MerchantMemoryEntity>> = dao.observeAllMerchantMemories()
     val budgetsFlow: Flow<List<BudgetEntity>> = dao.observeAllBudgets()
@@ -56,6 +58,7 @@ class SnapSpendRepository(private val database: SnapSpendDatabase) {
     }
 
     suspend fun getAllTransactionsOnce(): List<TransactionEntity> = dao.getAllTransactionsOnce()
+    suspend fun getTrashedTransactionsOnce(): List<TransactionEntity> = dao.getTrashedTransactionsOnce()
     suspend fun getAllCategoriesOnce(): List<CategoryEntity> = dao.getAllCategoriesOnce()
     suspend fun getAllMerchantMemoriesOnce(): List<MerchantMemoryEntity> = dao.getAllMerchantMemoriesOnce()
     suspend fun getAllBudgetsOnce(): List<BudgetEntity> = dao.getAllBudgetsOnce()
@@ -102,8 +105,7 @@ class SnapSpendRepository(private val database: SnapSpendDatabase) {
         val resolvedCategoryId = if (transaction.categoryId != 0L) {
             transaction.categoryId
         } else {
-            dao.getCategoryByName(transaction.category)?.id
-                ?: DefaultCategories.categoryIdForName(transaction.category)
+            resolveCategoryId(transaction.category)
         }
         val resolvedCategoryName = if (transaction.category.isNotBlank() && transaction.category != "Other") {
             transaction.category
@@ -140,9 +142,34 @@ class SnapSpendRepository(private val database: SnapSpendDatabase) {
         return id
     }
 
-    suspend fun deleteTransaction(id: Long) {
+    /**
+     * Soft-deletes a payment by setting `deletedAtMillis` (moves to Trash).
+     */
+    suspend fun deleteTransaction(id: Long, deletedAtMillis: Long = System.currentTimeMillis()) {
+        softDeleteTransaction(id, deletedAtMillis)
+    }
+
+    suspend fun softDeleteTransaction(id: Long, deletedAtMillis: Long = System.currentTimeMillis()) {
+        dao.softDeleteTransaction(id, deletedAtMillis)
+        refreshRepeatingPayments()
+    }
+
+    suspend fun restoreTransaction(id: Long) {
+        dao.restoreTransaction(id)
+        refreshRepeatingPayments()
+    }
+
+    suspend fun permanentlyDeleteTransaction(id: Long) {
         dao.deleteTransactionById(id)
         refreshRepeatingPayments()
+    }
+
+    suspend fun emptyTrash() {
+        dao.emptyTrash()
+    }
+
+    suspend fun purgeExpiredTrash(cutoffMillis: Long): Int {
+        return dao.purgeTrashedOlderThan(cutoffMillis)
     }
 
     /**
@@ -168,6 +195,7 @@ class SnapSpendRepository(private val database: SnapSpendDatabase) {
                 }
 
                 val key = draft.duplicateKey
+                val resolvedCatId = resolveCategoryId(draft.category)
                 if (draft.resolutionMode == ResolutionMode.UPDATE_PENDING_TO_FINAL && draft.existingMatchId != null) {
                     val updatedEntity = TransactionEntity(
                         id = draft.existingMatchId,
@@ -177,6 +205,7 @@ class SnapSpendRepository(private val database: SnapSpendDatabase) {
                         type = draft.type,
                         merchant = draft.merchant,
                         category = draft.category,
+                        categoryId = resolvedCatId,
                         paymentApp = draft.paymentApp,
                         referenceNumber = draft.referenceNumber,
                         status = draft.status,
@@ -194,6 +223,7 @@ class SnapSpendRepository(private val database: SnapSpendDatabase) {
                         type = draft.type,
                         merchant = draft.merchant,
                         category = draft.category,
+                        categoryId = resolvedCatId,
                         paymentApp = draft.paymentApp,
                         referenceNumber = draft.referenceNumber,
                         status = draft.status,
@@ -212,6 +242,11 @@ class SnapSpendRepository(private val database: SnapSpendDatabase) {
             updatedPendingCount = updatedPending,
             skippedDuplicateCount = skipped
         )
+    }
+
+    private suspend fun resolveCategoryId(categoryName: String): Long {
+        return dao.getCategoryByName(categoryName)?.id
+            ?: DefaultCategories.categoryIdForName(categoryName)
     }
 
     suspend fun saveMerchantMemoryRule(merchant: String, categoryName: String) {
@@ -318,12 +353,12 @@ class SnapSpendRepository(private val database: SnapSpendDatabase) {
     // --- Full Backup Serialization (JSON & CSV) ---
     suspend fun exportFullBackupJson(): String {
         val root = JSONObject()
-        root.put("schemaVersion", 1)
+        root.put("schemaVersion", 2)
         root.put("exportedAtMillis", System.currentTimeMillis())
         root.put("appName", "SnapSpend")
 
         val txArray = JSONArray()
-        for (tx in dao.getAllTransactionsOnce()) {
+        for (tx in dao.getAllTransactionsIncludingTrashOnce()) {
             val obj = JSONObject().apply {
                 put("id", tx.id)
                 put("timestamp", tx.timestamp)
@@ -339,6 +374,7 @@ class SnapSpendRepository(private val database: SnapSpendDatabase) {
                 put("createdAt", tx.createdAt)
                 put("source", tx.source.name)
                 put("duplicateKey", tx.duplicateKey)
+                put("deletedAtMillis", tx.deletedAtMillis ?: JSONObject.NULL)
             }
             txArray.put(obj)
         }
@@ -525,6 +561,7 @@ class SnapSpendRepository(private val database: SnapSpendDatabase) {
             val note = cols.getOrNull(11)?.trim().orEmpty()
 
             val dupKey = MoneyUtils.buildDuplicateKey(refRaw, timestamp, hasExplicitTime, amountPaise, merchant)
+            val resolvedCatId = resolveCategoryId(category)
             parsedTransactions.add(
                 TransactionEntity(
                     id = 0L,
@@ -534,6 +571,7 @@ class SnapSpendRepository(private val database: SnapSpendDatabase) {
                     type = type,
                     merchant = merchant,
                     category = category,
+                    categoryId = resolvedCatId,
                     paymentApp = paymentApp,
                     referenceNumber = refRaw,
                     status = status,
@@ -655,6 +693,13 @@ class SnapSpendRepository(private val database: SnapSpendDatabase) {
             val dupKey = o.optString("duplicateKey").ifBlank {
                 MoneyUtils.buildDuplicateKey(refRaw, timestamp, hasExplicitTime, amountPaise, merchant)
             }
+            val categoryName = o.optString("category", "Other")
+            val resolvedCatId = resolveCategoryId(categoryName)
+            val deletedAtMillis = if (!o.has("deletedAtMillis") || o.isNull("deletedAtMillis")) {
+                null
+            } else {
+                o.optLong("deletedAtMillis", 0L).takeIf { it > 0L }
+            }
             TransactionEntity(
                 id = 0L,
                 timestamp = timestamp,
@@ -662,14 +707,16 @@ class SnapSpendRepository(private val database: SnapSpendDatabase) {
                 amountPaise = amountPaise,
                 type = runCatching { TransactionType.valueOf(o.optString("type", "EXPENSE")) }.getOrDefault(TransactionType.EXPENSE),
                 merchant = merchant,
-                category = o.optString("category", "Other"),
+                category = categoryName,
+                categoryId = resolvedCatId,
                 paymentApp = o.optString("paymentApp", "Unknown"),
                 referenceNumber = refRaw,
                 status = runCatching { TransactionStatus.valueOf(o.optString("status", "SUCCESS")) }.getOrDefault(TransactionStatus.SUCCESS),
                 note = o.optString("note", ""),
                 createdAt = o.optLong("createdAt", System.currentTimeMillis()),
                 source = runCatching { TransactionSource.valueOf(o.optString("source", "IMPORT")) }.getOrDefault(TransactionSource.IMPORT),
-                duplicateKey = dupKey
+                duplicateKey = dupKey,
+                deletedAtMillis = deletedAtMillis
             )
         }
 
@@ -698,8 +745,28 @@ class SnapSpendRepository(private val database: SnapSpendDatabase) {
                 dao.insertBudgets(parsedBudgets)
 
                 val existingList = dao.getAllTransactionsOnce().toMutableList()
+                val existingTrashList = dao.getTrashedTransactionsOnce().toMutableList()
                 for (incoming in parsedTransactions) {
                     val normRef = MoneyUtils.normalizeReference(incoming.referenceNumber)
+                    if (incoming.deletedAtMillis != null) {
+                        val matchedTrash = existingTrashList.firstOrNull { ex ->
+                            val exRef = MoneyUtils.normalizeReference(ex.referenceNumber)
+                            if (normRef != null && exRef != null) {
+                                normRef == exRef && ex.deletedAtMillis == incoming.deletedAtMillis
+                            } else {
+                                ex.duplicateKey == incoming.duplicateKey && ex.deletedAtMillis == incoming.deletedAtMillis
+                            }
+                        }
+                        if (matchedTrash == null) {
+                            val newId = dao.insertTransaction(incoming)
+                            existingTrashList.add(incoming.copy(id = newId))
+                            inserted++
+                        } else {
+                            skipped++
+                        }
+                        continue
+                    }
+
                     val matched = existingList.firstOrNull { ex ->
                         val exRef = MoneyUtils.normalizeReference(ex.referenceNumber)
                         if (normRef != null && exRef != null) {

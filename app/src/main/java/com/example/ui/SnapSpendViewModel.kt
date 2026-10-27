@@ -35,7 +35,11 @@ import com.example.data.rules.PillBarEntry
 import com.example.data.rules.TopMerchantItem
 import com.example.ui.theme.ThemeMode
 import com.example.util.MoneyUtils
+import com.example.util.MonthEndEstimateResult
+import com.example.util.MonthEndMath
+import com.example.util.QuickRepeatChip
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.StateFlow
@@ -100,8 +104,22 @@ data class ChartControlState(
     val lineGranularity: String = "DAILY" // "DAILY", "WEEKLY", "MONTHLY"
 )
 
+enum class UndoActionKind {
+    SOFT_DELETE_RESTORE,
+    QUICK_REPEAT_HARD_DELETE
+}
+
+data class UndoBannerState(
+    val actionToken: Long,
+    val message: String,
+    val transactionId: Long,
+    val kind: UndoActionKind
+)
+
 data class SnapSpendUiState(
     val allTransactions: List<TransactionEntity> = emptyList(),
+    val trashedTransactions: List<TransactionEntity> = emptyList(),
+    val trashedCount: Int = 0,
     val filteredTransactions: List<TransactionEntity> = emptyList(),
     val groupedTransactions: List<Pair<String, List<TransactionEntity>>> = emptyList(),
     val categories: List<CategoryEntity> = emptyList(),
@@ -115,6 +133,9 @@ data class SnapSpendUiState(
     val thisMonthLeftPaise: Long = 0L,
     val thisMonthCategorySlices: List<CategorySlice> = emptyList(),
     val last5Transactions: List<TransactionEntity> = emptyList(),
+    val quickRepeatChips: List<QuickRepeatChip> = emptyList(),
+    val disabledQuickRepeatKeys: Set<String> = emptySet(),
+    val monthEndEstimate: MonthEndEstimateResult? = null,
     val availablePaymentApps: List<String> = emptyList(),
     // Charts & Local Insights
     val chartDateRange: DateRangeFilter = DateRangeFilter.THIS_MONTH,
@@ -169,11 +190,21 @@ class SnapSpendViewModel(application: Application) : AndroidViewModel(applicatio
     private val _toastMessage = MutableStateFlow<String?>(null)
     val toastMessage: StateFlow<String?> = _toastMessage.asStateFlow()
 
+    private val _undoBannerState = MutableStateFlow<UndoBannerState?>(null)
+    val undoBannerState: StateFlow<UndoBannerState?> = _undoBannerState.asStateFlow()
+
+    private val _disabledQuickRepeatKeys = MutableStateFlow<Set<String>>(emptySet())
+    val disabledQuickRepeatKeys: StateFlow<Set<String>> = _disabledQuickRepeatKeys.asStateFlow()
+
+    private var undoActionTokenCounter: Long = 0L
     private var pendingDriveAction: PendingDriveAction = PendingDriveAction.NONE
 
     init {
         viewModelScope.launch {
             repository.ensureDefaultCategoriesSeeded()
+            // Purge trashed items older than 30 days on app startup
+            val thirtyDaysMillis = 30L * 24L * 60L * 60L * 1000L
+            repository.purgeExpiredTrash(System.currentTimeMillis() - thirtyDaysMillis)
             repository.refreshRepeatingPayments()
             val silentEmail = backupManager.attemptSilentSignIn()
             _backupState.value = backupManager.getBackupState()
@@ -208,12 +239,20 @@ class SnapSpendViewModel(application: Application) : AndroidViewModel(applicatio
         Quintuple(txs, cats, memories, budgets, repeating)
     }
 
+    private val trashAndQuickRepeatControlFlow = combine(
+        repository.trashedTransactionsFlow,
+        _disabledQuickRepeatKeys
+    ) { trashedTxs, disabledKeys ->
+        trashedTxs to disabledKeys
+    }
+
     val uiState: StateFlow<SnapSpendUiState> = combine(
         coreDataFlow,
         _filterState,
         _chartControl,
-        _queuedScans
-    ) { (allTxs, categories, memories, budgets, repeating), filters, chartCtrl, queuedList ->
+        _queuedScans,
+        trashAndQuickRepeatControlFlow
+    ) { (allTxs, categories, memories, budgets, repeating), filters, chartCtrl, queuedList, (trashedTxs, disabledKeys) ->
         val now = System.currentTimeMillis()
         val (thisMonthStart, thisMonthEnd) = LocalInsightsAndRulesEngine.getMonthBounds(now, 0)
 
@@ -282,8 +321,22 @@ class SnapSpendViewModel(application: Application) : AndroidViewModel(applicatio
         val top5Places = LocalInsightsAndRulesEngine.buildTop5SpendingPlaces(chartRangeTxs.ifEmpty { allTxs })
         val localInsights = LocalInsightsAndRulesEngine.generateLocalMathInsights(allTxs, now)
 
+        val totalMonthlyBudgetPaise = budgets.sumOf { it.monthlyLimitPaise }
+        val monthEndEstimate = MonthEndMath.computeMonthEndEstimate(
+            transactions = allTxs,
+            totalMonthlyBudgetPaise = totalMonthlyBudgetPaise,
+            anchorMillis = now
+        )
+        val quickRepeatChips = MonthEndMath.computeQuickRepeats(
+            transactions = allTxs,
+            nowMillis = now,
+            maxChips = 6
+        )
+
         SnapSpendUiState(
             allTransactions = allTxs,
+            trashedTransactions = trashedTxs,
+            trashedCount = trashedTxs.size,
             filteredTransactions = filtered,
             groupedTransactions = grouped,
             categories = categories,
@@ -297,6 +350,9 @@ class SnapSpendViewModel(application: Application) : AndroidViewModel(applicatio
             thisMonthLeftPaise = thisMonthLeft,
             thisMonthCategorySlices = thisMonthSlices,
             last5Transactions = allTxs.take(5),
+            quickRepeatChips = quickRepeatChips,
+            disabledQuickRepeatKeys = disabledKeys,
+            monthEndEstimate = monthEndEstimate,
             availablePaymentApps = paymentApps,
             chartDateRange = chartCtrl.chartDateRange,
             lineGranularity = chartCtrl.lineGranularity,
@@ -670,7 +726,7 @@ class SnapSpendViewModel(application: Application) : AndroidViewModel(applicatio
         _scanState.value = ScanUiState.Idle
     }
 
-    // --- Manual / Edit Transaction ---
+    // --- Manual / Edit / Soft-Delete / Trash / Quick Repeat Transaction Actions ---
     fun saveManualOrEditedTransaction(
         transaction: TransactionEntity,
         learnMerchantCategory: Boolean
@@ -681,10 +737,100 @@ class SnapSpendViewModel(application: Application) : AndroidViewModel(applicatio
         }
     }
 
+    /**
+     * Soft-deletes a payment (`deletedAtMillis` set) and displays the 6-second Aqua UNDO bar.
+     * Supersedes any previous active UNDO banner so the prior action stays committed.
+     */
     fun deleteTransaction(id: Long) {
         viewModelScope.launch {
-            repository.deleteTransaction(id)
-            _toastMessage.value = "Payment deleted."
+            repository.softDeleteTransaction(id, System.currentTimeMillis())
+            _undoBannerState.value = UndoBannerState(
+                actionToken = ++undoActionTokenCounter,
+                message = "Payment deleted",
+                transactionId = id,
+                kind = UndoActionKind.SOFT_DELETE_RESTORE
+            )
+        }
+    }
+
+    /**
+     * Adds a payment immediately from a Quick Repeat chip (same merchant, category, and amount,
+     * source = MANUAL), disables that chip for 3 seconds, and shows the 6-second Aqua UNDO bar.
+     */
+    fun tapQuickRepeatChip(chip: QuickRepeatChip) {
+        if (chip.key in _disabledQuickRepeatKeys.value) return
+        _disabledQuickRepeatKeys.value = _disabledQuickRepeatKeys.value + chip.key
+        viewModelScope.launch {
+            delay(3000L)
+            _disabledQuickRepeatKeys.value = _disabledQuickRepeatKeys.value - chip.key
+        }
+        viewModelScope.launch {
+            val nowMillis = System.currentTimeMillis()
+            val newTx = TransactionEntity(
+                id = 0L,
+                timestamp = nowMillis,
+                hasExplicitTime = true,
+                amountPaise = chip.amountPaise,
+                type = TransactionType.EXPENSE,
+                merchant = chip.merchant,
+                category = chip.category,
+                paymentApp = chip.paymentApp,
+                status = com.example.data.local.TransactionStatus.SUCCESS,
+                note = "",
+                createdAt = nowMillis,
+                source = TransactionSource.MANUAL
+            )
+            val insertedId = repository.saveTransaction(newTx, learnMerchantCategory = false)
+            _undoBannerState.value = UndoBannerState(
+                actionToken = ++undoActionTokenCounter,
+                message = "Added ${chip.label}",
+                transactionId = insertedId,
+                kind = UndoActionKind.QUICK_REPEAT_HARD_DELETE
+            )
+        }
+    }
+
+    fun performUndo() {
+        val current = _undoBannerState.value ?: return
+        _undoBannerState.value = null
+        viewModelScope.launch {
+            when (current.kind) {
+                UndoActionKind.SOFT_DELETE_RESTORE -> {
+                    repository.restoreTransaction(current.transactionId)
+                    _toastMessage.value = "Payment restored."
+                }
+                UndoActionKind.QUICK_REPEAT_HARD_DELETE -> {
+                    repository.permanentlyDeleteTransaction(current.transactionId)
+                    _toastMessage.value = "Quick payment undone."
+                }
+            }
+        }
+    }
+
+    fun dismissUndoBanner(actionToken: Long) {
+        if (_undoBannerState.value?.actionToken == actionToken) {
+            _undoBannerState.value = null
+        }
+    }
+
+    fun restoreFromTrash(id: Long) {
+        viewModelScope.launch {
+            repository.restoreTransaction(id)
+            _toastMessage.value = "Payment restored from Trash."
+        }
+    }
+
+    fun deleteForeverFromTrash(id: Long) {
+        viewModelScope.launch {
+            repository.permanentlyDeleteTransaction(id)
+            _toastMessage.value = "Deleted forever."
+        }
+    }
+
+    fun emptyTrash() {
+        viewModelScope.launch {
+            repository.emptyTrash()
+            _toastMessage.value = "Trash emptied."
         }
     }
 
@@ -730,6 +876,13 @@ class SnapSpendViewModel(application: Application) : AndroidViewModel(applicatio
         viewModelScope.launch {
             repository.deleteCustomCategory(category)
             _toastMessage.value = "Category '${category.name}' removed."
+        }
+    }
+
+    fun deleteMerchantMemory(normalizedMerchant: String) {
+        viewModelScope.launch {
+            repository.deleteMerchantMemory(normalizedMerchant)
+            _toastMessage.value = "Removed learned rule for $normalizedMerchant"
         }
     }
 

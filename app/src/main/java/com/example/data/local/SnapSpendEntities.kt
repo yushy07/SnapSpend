@@ -93,7 +93,8 @@ data class TransactionEntity(
         hasExplicitTime = hasExplicitTime,
         amountPaise = amountPaise,
         merchant = merchant
-    )
+    ),
+    val deletedAtMillis: Long? = null
 ) {
     /**
      * Secondary constructor supporting string-typed `type` ("expense"/"earning"/"transfer"),
@@ -133,7 +134,8 @@ data class TransactionEntity(
             hasExplicitTime = true,
             amountPaise = amountInPaise,
             merchant = merchant
-        )
+        ),
+        deletedAtMillis = null
     )
 
     /** Secondary constructor supporting `date` and `amount` in paise as `Long` with enum types. */
@@ -173,7 +175,8 @@ data class TransactionEntity(
         note = note,
         createdAt = createdAt,
         source = source,
-        duplicateKey = duplicateKey
+        duplicateKey = duplicateKey,
+        deletedAtMillis = null
     )
 
     /** Alias for timestamp (epoch millis). */
@@ -241,7 +244,8 @@ data class TransactionEntity(
             status = status.name.lowercase(),
             transactionStatus = status,
             note = note,
-            createdAt = createdAt
+            createdAt = createdAt,
+            deletedAtMillis = deletedAtMillis
         )
     }
 }
@@ -272,7 +276,8 @@ data class TransactionUiPresentation(
     val status: String,
     val transactionStatus: TransactionStatus,
     val note: String,
-    val createdAt: Long
+    val createdAt: Long,
+    val deletedAtMillis: Long? = null
 )
 
 /**

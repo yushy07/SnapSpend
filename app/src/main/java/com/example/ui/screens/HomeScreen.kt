@@ -2,8 +2,11 @@ package com.example.ui.screens
 
 import androidx.compose.animation.core.animateFloatAsState
 import androidx.compose.foundation.BorderStroke
+import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
+import androidx.compose.foundation.clickable
+import androidx.compose.foundation.combinedClickable
 import androidx.compose.foundation.gestures.awaitEachGesture
 import androidx.compose.foundation.gestures.awaitFirstDown
 import androidx.compose.foundation.horizontalScroll
@@ -20,6 +23,7 @@ import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.offset
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.CircleShape
@@ -28,6 +32,7 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.outlined.TrendingDown
 import androidx.compose.material.icons.automirrored.outlined.TrendingUp
 import androidx.compose.material.icons.filled.Add
+import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.DocumentScanner
 import androidx.compose.material.icons.filled.Mic
 import androidx.compose.material.icons.filled.PictureAsPdf
@@ -36,10 +41,12 @@ import androidx.compose.material.icons.filled.Refresh
 import androidx.compose.material.icons.filled.Search
 import androidx.compose.material.icons.filled.Storefront
 import androidx.compose.material.icons.outlined.AccountBalanceWallet
+import androidx.compose.material.icons.outlined.Info
 import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
+import androidx.compose.material3.minimumInteractiveComponentSize
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableFloatStateOf
@@ -58,13 +65,16 @@ import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.platform.LocalDensity
+import androidx.compose.ui.platform.LocalView
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.style.TextDecoration
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.IntOffset
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import androidx.compose.ui.window.Dialog
 import com.example.data.local.TransactionEntity
 import com.example.data.local.TransactionStatus
 import com.example.data.local.TransactionType
@@ -92,12 +102,16 @@ import com.example.ui.theme.InkBlack
 import com.example.ui.theme.LocalReducedMotion
 import com.example.ui.theme.MarkScreenEntrancePlayedEffect
 import com.example.ui.theme.Motion
+import com.example.ui.theme.PaleMintHero
 import com.example.ui.theme.PureWhite
 import com.example.ui.theme.SnapSpendThemeTokens
 import com.example.ui.theme.SunnyYellow
 import com.example.ui.theme.rememberAnimatedPaise
 import com.example.ui.theme.staggeredScreenEntrance
 import com.example.util.MoneyUtils
+import com.example.util.MonthEndEstimateResult
+import com.example.util.MonthEndMath
+import com.example.util.QuickRepeatChip
 import java.util.Calendar
 import kotlin.math.roundToInt
 
@@ -114,6 +128,8 @@ fun HomeScreen(
     onTransactionClick: (TransactionEntity) -> Unit,
     onRetryQueuedScansClick: () -> Unit = {},
     onSetBudgetClick: () -> Unit = {},
+    onQuickRepeatTap: (QuickRepeatChip) -> Unit = {},
+    onQuickRepeatLongPress: (QuickRepeatChip) -> Unit = {},
     topContentPadding: Dp = 8.dp,
     bottomContentPadding: Dp = 120.dp,
     modifier: Modifier = Modifier
@@ -149,7 +165,7 @@ fun HomeScreen(
     // Build 100% locally calculated day-of-week spending data (Mon-Sun) for the Indigo Area Chart (zero hardcoded numbers)
     var areaPeriodToggle by rememberSaveable { mutableStateOf("This Week") }
     val weeklyDayEntries = remember(uiState.allTransactions, areaPeriodToggle) {
-        computeWeeklyDayChipData(uiState.allTransactions)
+        computeWeeklyDayChipData(uiState.allTransactions, areaPeriodToggle)
     }
     val dailyTargetAveragePaise = remember(totalMonthlyBudgetLimitPaise) {
         if (totalMonthlyBudgetLimitPaise > 0L) totalMonthlyBudgetLimitPaise / 30L else 0L
@@ -185,6 +201,19 @@ fun HomeScreen(
 
     val animatedSpentText = rememberAnimatedPaise(targetPaise = uiState.thisMonthSpentPaise)
     val animatedEarnedText = rememberAnimatedPaise(targetPaise = uiState.thisMonthEarnedPaise)
+
+    val monthEndEstimate = uiState.monthEndEstimate ?: remember(uiState.allTransactions, totalMonthlyBudgetLimitPaise) {
+        MonthEndMath.computeMonthEndEstimate(
+            transactions = uiState.allTransactions,
+            totalMonthlyBudgetPaise = totalMonthlyBudgetLimitPaise,
+            anchorMillis = System.currentTimeMillis()
+        )
+    }
+    var showMonthEndInfoDialog by rememberSaveable { mutableStateOf(false) }
+
+    if (showMonthEndInfoDialog) {
+        MonthEndFormulaInfoDialog(onDismiss = { showMonthEndInfoDialog = false })
+    }
 
     LazyColumn(
         modifier = modifier
@@ -359,6 +388,16 @@ fun HomeScreen(
             )
         }
 
+        // 4b. Separate 3D Month-End Estimate Card directly below Monthly Cashflow Pace
+        item(key = "home_month_end_estimate_card") {
+            MonthEndEstimate3DCard(
+                estimate = monthEndEstimate,
+                onSetBudgetClick = onSetBudgetClick,
+                onInfoClick = { showMonthEndInfoDialog = true },
+                modifier = Modifier.staggeredScreenEntrance("home", 4)
+            )
+        }
+
         // 5. Balance & Cashflow 3D Bento Summary (Sunny Yellow 3D Touch-Tilt Balance + 3D Coral Spent + 3D Mint Earned)
         item(key = "home_bento_grid") {
             Column(
@@ -418,6 +457,19 @@ fun HomeScreen(
             )
         }
 
+        // 6b. QUICK REPEATS row (above Recent Activity; hidden if there are none)
+        if (uiState.quickRepeatChips.isNotEmpty()) {
+            item(key = "home_quick_repeats_section") {
+                QuickRepeatsRowSection(
+                    chips = uiState.quickRepeatChips,
+                    disabledKeys = uiState.disabledQuickRepeatKeys,
+                    onChipTap = onQuickRepeatTap,
+                    onChipLongPress = onQuickRepeatLongPress,
+                    modifier = Modifier.staggeredScreenEntrance("home", 6)
+                )
+            }
+        }
+
         // 7. Recent Activity List (3D Stacked Deck)
         item(key = "home_recent_header") {
             Row(
@@ -462,14 +514,26 @@ fun HomeScreen(
  * Computes Mon-Sun spending amounts and percentages on-device using plain math.
  * Zero hardcoded fallback percentages: when no transactions exist, all days are 0%.
  */
-private fun computeWeeklyDayChipData(transactions: List<TransactionEntity>): List<DaySpendChipData> {
+private fun computeWeeklyDayChipData(
+    transactions: List<TransactionEntity>,
+    periodLabel: String = "This Week"
+): List<DaySpendChipData> {
     val dayNames = listOf("Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun")
     val sumsByDayIndex = LongArray(7)
 
+    val now = System.currentTimeMillis()
+    val (startMillis, endMillis) = if (periodLabel.equals("This Month", ignoreCase = true)) {
+        com.example.data.rules.LocalInsightsAndRulesEngine.getMonthBounds(now, 0)
+    } else {
+        com.example.data.rules.LocalInsightsAndRulesEngine.getWeekBounds(now, 0)
+    }
+
     val cal = Calendar.getInstance()
     val expenseTxs = transactions.filter {
-        it.type == TransactionType.EXPENSE && it.status == TransactionStatus.SUCCESS
-    }.take(30)
+        it.type == TransactionType.EXPENSE &&
+            it.status == TransactionStatus.SUCCESS &&
+            it.timestamp in startMillis..endMillis
+    }
 
     expenseTxs.forEach { tx ->
         cal.timeInMillis = tx.timestamp
@@ -872,3 +936,309 @@ private fun EmptyRecentTransactionsCard(
         }
     }
 }
+
+/**
+ * Separate 3D Card directly below Monthly Cashflow Pace showing:
+ * a) "At this pace you'll spend ₹X by month end" (or "Add a few more payments to see an estimate")
+ * b) "SAFE TO SPEND PER DAY: ₹Y" / "Over budget by ₹X" (in coral) / "Set a budget to see this" (opens budget setup)
+ * Plus a small (i) button that opens a card explaining both formulas in plain words.
+ */
+@Composable
+private fun MonthEndEstimate3DCard(
+    estimate: MonthEndEstimateResult,
+    onSetBudgetClick: () -> Unit,
+    onInfoClick: () -> Unit,
+    modifier: Modifier = Modifier
+) {
+    val shape = RoundedCornerShape(28.dp)
+    val isDark = SnapSpendThemeTokens.colors.isDark
+
+    Editorial3DLayerBox(
+        modifier = modifier
+            .fillMaxWidth()
+            .testTag("month_end_estimate_card"),
+        shape = shape,
+        extrusionColor = if (isDark) SunnyYellow else InkBlack,
+        extrusionBorderColor = InkBlack,
+        depthX = 4.dp,
+        depthY = 6.dp
+    ) {
+        Surface(
+            modifier = Modifier.fillMaxWidth(),
+            shape = shape,
+            color = PaleMintHero,
+            contentColor = InkBlack,
+            border = BorderStroke(1.8.dp, InkBlack)
+        ) {
+            Column(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(horizontal = 20.dp, vertical = 18.dp),
+                verticalArrangement = Arrangement.spacedBy(10.dp)
+            ) {
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.SpaceBetween,
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    Text(
+                        text = "MONTH-END ESTIMATE",
+                        style = CondensedCardTitleStyle.copy(fontSize = 20.sp),
+                        color = InkBlack
+                    )
+
+                    Surface(
+                        onClick = onInfoClick,
+                        modifier = Modifier
+                            .size(36.dp)
+                            .minimumInteractiveComponentSize()
+                            .testTag("month_end_info_button"),
+                        shape = CircleShape,
+                        color = PureWhite,
+                        contentColor = InkBlack,
+                        border = BorderStroke(1.5.dp, InkBlack)
+                    ) {
+                        Box(contentAlignment = Alignment.Center) {
+                            Icon(
+                                imageVector = Icons.Outlined.Info,
+                                contentDescription = "How month-end estimate is calculated",
+                                tint = InkBlack,
+                                modifier = Modifier.size(18.dp)
+                            )
+                        }
+                    }
+                }
+
+                // Line a) Month-end pace estimate
+                Text(
+                    text = estimate.paceLineText,
+                    style = MaterialTheme.typography.bodyLarge.copy(
+                        fontWeight = FontWeight.ExtraBold,
+                        fontFeatureSettings = "tnum"
+                    ),
+                    color = InkBlack,
+                    modifier = Modifier.testTag("month_end_pace_line")
+                )
+
+                // Line b) Safe to spend per day / Over budget / Set a budget
+                if (!estimate.hasBudget) {
+                    Surface(
+                        onClick = onSetBudgetClick,
+                        shape = CircleShape,
+                        color = SunnyYellow,
+                        contentColor = InkBlack,
+                        border = BorderStroke(1.5.dp, InkBlack),
+                        modifier = Modifier.testTag("month_end_set_budget_button")
+                    ) {
+                        Text(
+                            text = estimate.safeLineText,
+                            modifier = Modifier.padding(horizontal = 14.dp, vertical = 8.dp),
+                            style = MaterialTheme.typography.bodyMedium.copy(
+                                fontWeight = FontWeight.ExtraBold,
+                                textDecoration = TextDecoration.Underline
+                            ),
+                            color = InkBlack
+                        )
+                    }
+                } else if (estimate.isOverBudget) {
+                    Surface(
+                        shape = RoundedCornerShape(14.dp),
+                        color = InkBlack,
+                        border = BorderStroke(1.5.dp, InkBlack),
+                        modifier = Modifier.testTag("month_end_safe_line")
+                    ) {
+                        Text(
+                            text = estimate.safeLineText,
+                            modifier = Modifier.padding(horizontal = 14.dp, vertical = 8.dp),
+                            style = MaterialTheme.typography.titleMedium.copy(
+                                fontWeight = FontWeight.ExtraBold,
+                                fontFeatureSettings = "tnum"
+                            ),
+                            color = EditorialCoral
+                        )
+                    }
+                } else {
+                    Text(
+                        text = estimate.safeLineText,
+                        style = CondensedCardTitleStyle.copy(
+                            fontSize = 19.sp,
+                            fontFeatureSettings = "tnum"
+                        ),
+                        color = InkBlack,
+                        modifier = Modifier.testTag("month_end_safe_line")
+                    )
+                }
+            }
+        }
+    }
+}
+
+@Composable
+private fun MonthEndFormulaInfoDialog(
+    onDismiss: () -> Unit
+) {
+    Dialog(onDismissRequest = onDismiss) {
+        Editorial3DLayerBox(
+            modifier = Modifier
+                .fillMaxWidth()
+                .testTag("month_end_info_dialog"),
+            shape = RoundedCornerShape(28.dp),
+            extrusionColor = InkBlack,
+            extrusionBorderColor = InkBlack,
+            depthX = 5.dp,
+            depthY = 7.dp
+        ) {
+            Surface(
+                modifier = Modifier.fillMaxWidth(),
+                shape = RoundedCornerShape(28.dp),
+                color = PureWhite,
+                contentColor = InkBlack,
+                border = BorderStroke(2.dp, InkBlack)
+            ) {
+                Column(
+                    modifier = Modifier.padding(22.dp),
+                    verticalArrangement = Arrangement.spacedBy(12.dp)
+                ) {
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.SpaceBetween,
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Text(
+                            text = "HOW THIS IS CALCULATED",
+                            style = CondensedCardTitleStyle.copy(fontSize = 22.sp),
+                            color = InkBlack
+                        )
+                        Surface(
+                            onClick = onDismiss,
+                            modifier = Modifier.size(34.dp),
+                            shape = CircleShape,
+                            color = SunnyYellow,
+                            border = BorderStroke(1.5.dp, InkBlack)
+                        ) {
+                            Box(contentAlignment = Alignment.Center) {
+                                Icon(
+                                    imageVector = Icons.Default.Close,
+                                    contentDescription = "Close",
+                                    tint = InkBlack,
+                                    modifier = Modifier.size(18.dp)
+                                )
+                            }
+                        }
+                    }
+
+                    Text(
+                        text = "1. Month-end pace:\nWe take what you've spent on successful expenses so far this month, multiply by the total days in this month, and divide by the days passed so far. Shown once you have at least 5 payments and 5 days have passed.",
+                        style = MaterialTheme.typography.bodyMedium.copy(fontWeight = FontWeight.SemiBold),
+                        color = InkBlack
+                    )
+
+                    Text(
+                        text = "2. Safe to spend per day:\nWe subtract what you've spent so far from your total monthly budget, then divide by the days left in the month (counting today), rounded down to the nearest paisa. Transfers, failed, pending, and trashed items are ignored.",
+                        style = MaterialTheme.typography.bodyMedium.copy(fontWeight = FontWeight.SemiBold),
+                        color = InkBlack
+                    )
+                }
+            }
+        }
+    }
+}
+
+/**
+ * QUICK REPEATS row above "Recent activity":
+ * Shows up to 6 chips (like "Chai ₹20") for successful expenses with the same merchant and amount
+ * appearing 3+ times in the last 90 days.
+ * - Tap: light haptic + adds a new payment now (source = manual) + 3s chip disable + 6s UNDO bar.
+ * - Long-press: opens the add-by-hand sheet pre-filled so the user can change the amount.
+ */
+@OptIn(ExperimentalFoundationApi::class)
+@Composable
+private fun QuickRepeatsRowSection(
+    chips: List<QuickRepeatChip>,
+    disabledKeys: Set<String>,
+    onChipTap: (QuickRepeatChip) -> Unit,
+    onChipLongPress: (QuickRepeatChip) -> Unit,
+    modifier: Modifier = Modifier
+) {
+    val view = LocalView.current
+
+    Column(
+        modifier = modifier
+            .fillMaxWidth()
+            .testTag("home_quick_repeats_section"),
+        verticalArrangement = Arrangement.spacedBy(10.dp)
+    ) {
+        TinySectionLabel(text = "QUICK REPEATS")
+
+        Row(
+            modifier = Modifier
+                .fillMaxWidth()
+                .horizontalScroll(rememberScrollState()),
+            horizontalArrangement = Arrangement.spacedBy(10.dp)
+        ) {
+            chips.forEachIndexed { index, chip ->
+                val isDisabled = chip.key in disabledKeys
+                val chipColor = when (index % 4) {
+                    0 -> SunnyYellow
+                    1 -> EditorialAqua
+                    2 -> EditorialPink
+                    else -> EditorialMint
+                }
+
+                Editorial3DLayerBox(
+                    modifier = Modifier
+                        .graphicsLayer { alpha = if (isDisabled) 0.48f else 1f }
+                        .testTag("quick_repeat_chip_$index"),
+                    shape = CircleShape,
+                    extrusionColor = InkBlack,
+                    extrusionBorderColor = InkBlack,
+                    depthX = 3.dp,
+                    depthY = 4.dp
+                ) {
+                    Surface(
+                        modifier = Modifier
+                            .clip(CircleShape)
+                            .combinedClickable(
+                                enabled = !isDisabled,
+                                onClick = {
+                                    Motion.performLightTapHaptic(view)
+                                    onChipTap(chip)
+                                },
+                                onLongClick = {
+                                    Motion.performLightTapHaptic(view)
+                                    onChipLongPress(chip)
+                                }
+                            ),
+                        shape = CircleShape,
+                        color = chipColor,
+                        contentColor = InkBlack,
+                        border = BorderStroke(1.8.dp, InkBlack)
+                    ) {
+                        Row(
+                            modifier = Modifier.padding(horizontal = 16.dp, vertical = 10.dp),
+                            verticalAlignment = Alignment.CenterVertically,
+                            horizontalArrangement = Arrangement.spacedBy(6.dp)
+                        ) {
+                            Icon(
+                                imageVector = Icons.Default.Add,
+                                contentDescription = null,
+                                tint = InkBlack,
+                                modifier = Modifier.size(16.dp)
+                            )
+                            Text(
+                                text = chip.label,
+                                style = MaterialTheme.typography.bodyMedium.copy(
+                                    fontWeight = FontWeight.ExtraBold,
+                                    fontFeatureSettings = "tnum"
+                                ),
+                                color = InkBlack,
+                                maxLines = 1
+                            )
+                        }
+                    }
+                }
+            }
+        }
+    }
+}
+

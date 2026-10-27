@@ -116,9 +116,12 @@ import androidx.core.view.WindowCompat
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.example.data.local.CategoryType
 import com.example.data.local.TransactionEntity
+import com.example.data.local.TransactionSource
 import com.example.data.local.TransactionStatus
+import com.example.data.local.TransactionType
 import com.example.ui.ScanUiState
 import com.example.ui.SnapSpendViewModel
+import com.example.ui.UndoBannerState
 import com.example.ui.components.Editorial3DLayerBox
 import com.example.ui.components.EditorialSquiggleBackground
 import com.example.ui.components.WhitePillChip
@@ -132,6 +135,7 @@ import com.example.ui.screens.QuickAddSourceBottomSheet
 import com.example.ui.screens.SettingsAndBackupScreen
 import com.example.ui.screens.TransactionEditorDialog
 import com.example.ui.screens.TransactionsScreen
+import com.example.ui.screens.TrashScreen
 import com.example.ui.theme.BrightCardBlack
 import com.example.ui.theme.CondensedCardTitleStyle
 import com.example.ui.theme.DarkCardSurface
@@ -306,11 +310,13 @@ fun SnapSpendRootScreen(
     val restoreOffer by viewModel.restoreOffer.collectAsStateWithLifecycle()
     val pendingConsentSender by viewModel.pendingConsentIntentSender.collectAsStateWithLifecycle()
     val toastMessage by viewModel.toastMessage.collectAsStateWithLifecycle()
+    val undoBannerState by viewModel.undoBannerState.collectAsStateWithLifecycle()
 
     val hasSeenAiScanNotice by snapSpendPrefs.hasSeenAiScanNoticeFlow.collectAsStateWithLifecycle(initialValue = false)
     val hasPromptedBudgetNotifications by snapSpendPrefs.hasPromptedBudgetNotificationsFlow.collectAsStateWithLifecycle(initialValue = false)
 
     var showOnboardingReplay by rememberSaveable { mutableStateOf(false) }
+    var showTrashScreen by rememberSaveable { mutableStateOf(false) }
     var showBeforeFirstScanDialog by rememberSaveable { mutableStateOf(false) }
     var pendingScanAction by remember { mutableStateOf<(() -> Unit)?>(null) }
 
@@ -327,13 +333,14 @@ fun SnapSpendRootScreen(
 
     // Lifecycle observer: refresh notification permission on ON_RESUME
     val lifecycleOwner = LocalLifecycleOwner.current
-    DisposableEffect(lifecycleOwner) {
+    DisposableEffect(lifecycleOwner, hasPromptedBudgetNotifications) {
         val observer = LifecycleEventObserver { _, event ->
             if (event == Lifecycle.Event.ON_RESUME) {
                 notificationPermissionStatus = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
                     when {
                         ContextCompat.checkSelfPermission(activity, Manifest.permission.POST_NOTIFICATIONS) == PackageManager.PERMISSION_GRANTED -> "ALLOWED"
                         ActivityCompat.shouldShowRequestPermissionRationale(activity, Manifest.permission.POST_NOTIFICATIONS) -> "NOT_ASKED"
+                        hasPromptedBudgetNotifications -> "BLOCKED"
                         else -> "NOT_ASKED"
                     }
                 } else {
@@ -382,7 +389,7 @@ fun SnapSpendRootScreen(
     var samplePresetCounter by rememberSaveable { mutableIntStateOf(0) }
 
     // BackHandler on non-Home tabs to return cleanly to Home
-    if (currentTab != SnapSpendTab.HOME && scanState is ScanUiState.Idle) {
+    if (currentTab != SnapSpendTab.HOME && scanState is ScanUiState.Idle && !showTrashScreen) {
         BackHandler {
             currentTab = SnapSpendTab.HOME
         }
@@ -511,6 +518,14 @@ fun SnapSpendRootScreen(
         }
     }
 
+    LaunchedEffect(undoBannerState?.actionToken) {
+        val banner = undoBannerState
+        if (banner != null) {
+            delay(6000L)
+            viewModel.dismissUndoBanner(banner.actionToken)
+        }
+    }
+
     var isFabExpanded by rememberSaveable { mutableStateOf(true) }
     LaunchedEffect(currentTab) {
         isFabExpanded = true
@@ -596,13 +611,37 @@ fun SnapSpendRootScreen(
                         )
                     },
                     bottomBar = {
-                        EditorialBottomNavBar(
-                            currentTab = currentTab,
-                            onTabSelected = { currentTab = it },
-                            isDark = isDark,
-                            pendingTransactionCount = uiState.allTransactions.count { it.status == TransactionStatus.PENDING },
-                            hasBudgetWarning = uiState.activeBudgetAlerts.isNotEmpty() || uiState.budgetStatuses.any { it.isWarning80 || it.isExceeded100 }
-                        )
+                        Column(
+                            modifier = Modifier.fillMaxWidth(),
+                            horizontalAlignment = Alignment.CenterHorizontally
+                        ) {
+                            AnimatedVisibility(
+                                visible = undoBannerState != null,
+                                enter = fadeIn(Motion.quickTween(LocalReducedMotion.current)),
+                                exit = fadeOut(Motion.quickTween(LocalReducedMotion.current))
+                            ) {
+                                val banner = undoBannerState
+                                if (banner != null) {
+                                    EditorialAquaUndoBar(
+                                        banner = banner,
+                                        isDark = isDark,
+                                        onUndoClick = viewModel::performUndo
+                                    )
+                                }
+                            }
+                            EditorialBottomNavBar(
+                                currentTab = currentTab,
+                                onTabSelected = {
+                                    if (it != SnapSpendTab.SETTINGS) {
+                                        showTrashScreen = false
+                                    }
+                                    currentTab = it
+                                },
+                                isDark = isDark,
+                                pendingTransactionCount = uiState.allTransactions.count { it.status == TransactionStatus.PENDING },
+                                hasBudgetWarning = uiState.activeBudgetAlerts.isNotEmpty() || uiState.budgetStatuses.any { it.isWarning80 || it.isExceeded100 }
+                            )
+                        }
                     }
                 ) { innerPadding ->
                     val topContentPadding = innerPadding.calculateTopPadding() + 8.dp
@@ -679,6 +718,27 @@ fun SnapSpendRootScreen(
                                         onSetBudgetClick = {
                                             showBudgetSetupDialog = true
                                         },
+                                        onQuickRepeatTap = { chip ->
+                                            viewModel.tapQuickRepeatChip(chip)
+                                        },
+                                        onQuickRepeatLongPress = { chip ->
+                                            val nowMillis = System.currentTimeMillis()
+                                            editingTransaction = TransactionEntity(
+                                                id = 0L,
+                                                timestamp = nowMillis,
+                                                hasExplicitTime = true,
+                                                amountPaise = chip.amountPaise,
+                                                type = TransactionType.EXPENSE,
+                                                merchant = chip.merchant,
+                                                category = chip.category,
+                                                paymentApp = chip.paymentApp,
+                                                status = TransactionStatus.SUCCESS,
+                                                note = "",
+                                                createdAt = nowMillis,
+                                                source = TransactionSource.MANUAL
+                                            )
+                                            showTransactionEditor = true
+                                        },
                                         topContentPadding = topContentPadding,
                                         bottomContentPadding = bottomContentPadding
                                     )
@@ -741,68 +801,85 @@ fun SnapSpendRootScreen(
                                         onSetBudgetClick = {
                                             showBudgetSetupDialog = true
                                         },
+                                        onTransactionClick = { tx ->
+                                            editingTransaction = tx
+                                            showTransactionEditor = true
+                                        },
                                         topContentPadding = topContentPadding,
                                         bottomContentPadding = bottomContentPadding
                                     )
                                 }
 
                                 SnapSpendTab.SETTINGS -> {
-                                    SettingsAndBackupScreen(
-                                        uiState = uiState,
-                                        backupState = backupState,
-                                        isBackupBusy = isBackupBusy,
-                                        themeMode = themeMode,
-                                        onThemeModeChange = viewModel::setThemeMode,
-                                        onConnectGoogleClick = { viewModel.connectGoogleAccount(activity) },
-                                        onDisconnectGoogleClick = viewModel::disconnectGoogleAccount,
-                                        onBackupNowClick = viewModel::triggerDriveBackupNow,
-                                        onRestoreFromDriveClick = {
-                                            viewModel.checkForDriveBackupToRestore(silentIfNone = false)
-                                        },
-                                        onExportJsonClick = {
-                                            exportJsonLauncher.launch("snapspend_backup.json")
-                                        },
-                                        onExportCsvClick = {
-                                            exportCsvLauncher.launch("snapspend_transactions.csv")
-                                        },
-                                        onImportJsonClick = { replaceAll ->
-                                            importReplaceMode = replaceAll
-                                            importJsonLauncher.launch(arrayOf("application/json", "*/*"))
-                                        },
-                                        onSaveCategory = { id, oldName, newName, type, colorHex, isDefault ->
-                                            viewModel.saveCategory(
-                                                id = id,
-                                                oldName = oldName,
-                                                newName = newName,
-                                                type = type,
-                                                colorHex = colorHex,
-                                                iconName = "category",
-                                                isDefault = isDefault
-                                            )
-                                        },
-                                        onDeleteCategory = viewModel::deleteCustomCategory,
-                                        onDeleteMerchantMemory = { normMerchant ->
-                                            viewModel.showToast("Removed learned rule for $normMerchant")
-                                        },
-                                        onOpenOnboardingClick = {
-                                            showOnboardingReplay = true
-                                        },
-                                        notificationPermissionStatus = notificationPermissionStatus,
-                                        onRequestNotificationPermission = {
-                                            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
-                                                if (notificationPermissionStatus == "BLOCKED") {
-                                                    showBlockedNotificationSettingsDialog = true
-                                                } else {
-                                                    showBudgetNotificationRationale = true
+                                    if (showTrashScreen) {
+                                        TrashScreen(
+                                            trashedTransactions = uiState.trashedTransactions,
+                                            onRestoreTransaction = viewModel::restoreFromTrash,
+                                            onDeleteForeverTransaction = viewModel::deleteForeverFromTrash,
+                                            onEmptyTrash = viewModel::emptyTrash,
+                                            onBackClick = { showTrashScreen = false },
+                                            topContentPadding = topContentPadding,
+                                            bottomContentPadding = bottomContentPadding
+                                        )
+                                    } else {
+                                        SettingsAndBackupScreen(
+                                            uiState = uiState,
+                                            backupState = backupState,
+                                            isBackupBusy = isBackupBusy,
+                                            themeMode = themeMode,
+                                            onThemeModeChange = viewModel::setThemeMode,
+                                            onConnectGoogleClick = { viewModel.connectGoogleAccount(activity) },
+                                            onDisconnectGoogleClick = viewModel::disconnectGoogleAccount,
+                                            onBackupNowClick = viewModel::triggerDriveBackupNow,
+                                            onRestoreFromDriveClick = {
+                                                viewModel.checkForDriveBackupToRestore(silentIfNone = false)
+                                            },
+                                            onExportJsonClick = {
+                                                exportJsonLauncher.launch("snapspend_backup.json")
+                                            },
+                                            onExportCsvClick = {
+                                                exportCsvLauncher.launch("snapspend_transactions.csv")
+                                            },
+                                            onImportJsonClick = { replaceAll ->
+                                                importReplaceMode = replaceAll
+                                                importJsonLauncher.launch(arrayOf("application/json", "*/*"))
+                                            },
+                                            onSaveCategory = { id, oldName, newName, type, colorHex, isDefault ->
+                                                viewModel.saveCategory(
+                                                    id = id,
+                                                    oldName = oldName,
+                                                    newName = newName,
+                                                    type = type,
+                                                    colorHex = colorHex,
+                                                    iconName = "category",
+                                                    isDefault = isDefault
+                                                )
+                                            },
+                                            onDeleteCategory = viewModel::deleteCustomCategory,
+                                            onDeleteMerchantMemory = viewModel::deleteMerchantMemory,
+                                            onOpenOnboardingClick = {
+                                                showOnboardingReplay = true
+                                            },
+                                            onOpenTrashClick = {
+                                                showTrashScreen = true
+                                            },
+                                            notificationPermissionStatus = notificationPermissionStatus,
+                                            onRequestNotificationPermission = {
+                                                if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+                                                    if (notificationPermissionStatus == "BLOCKED") {
+                                                        showBlockedNotificationSettingsDialog = true
+                                                    } else {
+                                                        showBudgetNotificationRationale = true
+                                                    }
                                                 }
-                                            }
-                                        },
-                                        onOpenAppSettings = {
-                                            openAppSystemSettings()
-                                        },
-                                        topContentPadding = topContentPadding,
-                                        bottomContentPadding = bottomContentPadding
-                                    )
+                                            },
+                                            onOpenAppSettings = {
+                                                openAppSystemSettings()
+                                            },
+                                            topContentPadding = topContentPadding,
+                                            bottomContentPadding = bottomContentPadding
+                                        )
+                                    }
                                 }
                             }
                         }
@@ -1478,3 +1555,88 @@ private fun QuickAddFloatingPillButton(
         }
     }
 }
+
+/**
+ * 6-second Aqua ("Payment deleted · UNDO" / "Added ... · UNDO") bar displayed directly above the bottom navigation bar.
+ */
+@Composable
+private fun EditorialAquaUndoBar(
+    banner: UndoBannerState,
+    isDark: Boolean,
+    onUndoClick: () -> Unit
+) {
+    val view = LocalView.current
+    val barShape = RoundedCornerShape(22.dp)
+
+    Box(
+        modifier = Modifier
+            .fillMaxWidth()
+            .padding(horizontal = 16.dp, vertical = 4.dp)
+            .testTag("undo_banner")
+    ) {
+        Editorial3DLayerBox(
+            modifier = Modifier.fillMaxWidth(),
+            shape = barShape,
+            depthX = 2.5.dp,
+            depthY = 3.5.dp,
+            extrusionColor = if (isDark) Color(0xFF000000) else InkBlack,
+            enableInteractiveTilt = false
+        ) {
+            Surface(
+                modifier = Modifier.fillMaxWidth(),
+                shape = barShape,
+                color = EditorialAqua,
+                contentColor = BrightCardBlack,
+                border = BorderStroke(1.8.dp, BrightCardBlack),
+                shadowElevation = 6.dp
+            ) {
+                Row(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(horizontal = 18.dp, vertical = 10.dp),
+                    horizontalArrangement = Arrangement.SpaceBetween,
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    Text(
+                        text = "${banner.message} · UNDO",
+                        style = MaterialTheme.typography.bodyMedium.copy(
+                            fontWeight = FontWeight.ExtraBold
+                        ),
+                        color = BrightCardBlack,
+                        modifier = Modifier.weight(1f)
+                    )
+
+                    Spacer(modifier = Modifier.width(12.dp))
+
+                    Surface(
+                        onClick = {
+                            Motion.performLightTapHaptic(view)
+                            onUndoClick()
+                        },
+                        modifier = Modifier
+                            .minimumInteractiveComponentSize()
+                            .testTag("undo_banner_button"),
+                        shape = CircleShape,
+                        color = PureWhite,
+                        contentColor = InkBlack,
+                        border = BorderStroke(1.6.dp, InkBlack)
+                    ) {
+                        Box(
+                            modifier = Modifier.padding(horizontal = 16.dp, vertical = 8.dp),
+                            contentAlignment = Alignment.Center
+                        ) {
+                            Text(
+                                text = "UNDO",
+                                style = MaterialTheme.typography.labelLarge.copy(
+                                    fontWeight = FontWeight.ExtraBold
+                                ),
+                                color = InkBlack
+                            )
+                        }
+                    }
+                }
+            }
+        }
+    }
+}
+

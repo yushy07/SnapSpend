@@ -13,33 +13,37 @@ import kotlinx.coroutines.flow.map
 @Dao
 interface TransactionDao {
     // --- Basic Fetch Queries ---
-    @Query("SELECT * FROM transactions ORDER BY timestamp DESC, id DESC")
+    @Query("SELECT * FROM transactions WHERE deletedAtMillis IS NULL ORDER BY timestamp DESC, id DESC")
     fun observeAllTransactions(): Flow<List<TransactionEntity>>
 
-    @Query("SELECT * FROM transactions ORDER BY timestamp DESC, id DESC")
+    @Query("SELECT * FROM transactions WHERE deletedAtMillis IS NULL ORDER BY timestamp DESC, id DESC")
     suspend fun getAllTransactionsOnce(): List<TransactionEntity>
 
-    @Query("SELECT * FROM transactions WHERE id = :id LIMIT 1")
+    @Query("SELECT * FROM transactions ORDER BY timestamp DESC, id DESC")
+    suspend fun getAllTransactionsIncludingTrashOnce(): List<TransactionEntity>
+
+    @Query("SELECT * FROM transactions WHERE id = :id AND deletedAtMillis IS NULL LIMIT 1")
     suspend fun getTransactionById(id: Long): TransactionEntity?
 
-    @Query("SELECT * FROM transactions WHERE duplicateKey = :duplicateKey LIMIT 1")
+    @Query("SELECT * FROM transactions WHERE duplicateKey = :duplicateKey AND deletedAtMillis IS NULL LIMIT 1")
     suspend fun findByDuplicateKey(duplicateKey: String): TransactionEntity?
 
-    @Query("SELECT * FROM transactions WHERE referenceNumber IS NOT NULL AND LOWER(TRIM(referenceNumber)) = LOWER(TRIM(:refNumber)) LIMIT 1")
+    @Query("SELECT * FROM transactions WHERE referenceNumber IS NOT NULL AND LOWER(TRIM(referenceNumber)) = LOWER(TRIM(:refNumber)) AND deletedAtMillis IS NULL LIMIT 1")
     suspend fun findByReferenceNumber(refNumber: String): TransactionEntity?
 
     // --- Date-Range Queries ---
-    @Query("SELECT * FROM transactions WHERE timestamp BETWEEN :startDate AND :endDate ORDER BY timestamp DESC, id DESC")
+    @Query("SELECT * FROM transactions WHERE timestamp BETWEEN :startDate AND :endDate AND deletedAtMillis IS NULL ORDER BY timestamp DESC, id DESC")
     fun observeTransactionsByDateRange(startDate: Long, endDate: Long): Flow<List<TransactionEntity>>
 
-    @Query("SELECT * FROM transactions WHERE timestamp BETWEEN :startDate AND :endDate ORDER BY timestamp DESC, id DESC")
+    @Query("SELECT * FROM transactions WHERE timestamp BETWEEN :startDate AND :endDate AND deletedAtMillis IS NULL ORDER BY timestamp DESC, id DESC")
     suspend fun getTransactionsByDateRange(startDate: Long, endDate: Long): List<TransactionEntity>
 
     // --- Multi-Filter + Date-Range Queries ---
     @Query(
         """
         SELECT * FROM transactions
-        WHERE (:searchQuery = '' 
+        WHERE deletedAtMillis IS NULL
+          AND (:searchQuery = '' 
                OR LOWER(merchant) LIKE '%' || LOWER(:searchQuery) || '%'
                OR LOWER(category) LIKE '%' || LOWER(:searchQuery) || '%'
                OR LOWER(note) LIKE '%' || LOWER(:searchQuery) || '%'
@@ -73,7 +77,8 @@ interface TransactionDao {
     @Query(
         """
         SELECT * FROM transactions
-        WHERE (:searchQuery = '' 
+        WHERE deletedAtMillis IS NULL
+          AND (:searchQuery = '' 
                OR LOWER(merchant) LIKE '%' || LOWER(:searchQuery) || '%'
                OR LOWER(category) LIKE '%' || LOWER(:searchQuery) || '%'
                OR LOWER(note) LIKE '%' || LOWER(:searchQuery) || '%'
@@ -184,7 +189,7 @@ interface TransactionDao {
             paymentApp = :paymentApp,
             referenceNumber = COALESCE(:referenceNumber, referenceNumber),
             note = CASE WHEN :note = '' THEN note ELSE :note END
-        WHERE id = :id AND status = 'PENDING'
+        WHERE id = :id AND status = 'PENDING' AND deletedAtMillis IS NULL
         """
     )
     suspend fun updatePendingTransactionToSuccess(
@@ -208,6 +213,7 @@ interface TransactionDao {
         WHERE referenceNumber IS NOT NULL
           AND LOWER(TRIM(referenceNumber)) = LOWER(TRIM(:referenceNumber))
           AND status = 'PENDING'
+          AND deletedAtMillis IS NULL
         """
     )
     suspend fun updatePendingToSuccessByReferenceNumber(
@@ -226,6 +232,7 @@ interface TransactionDao {
             timestamp = :updatedTimestamp
         WHERE duplicateKey = :duplicateKey
           AND status = 'PENDING'
+          AND deletedAtMillis IS NULL
         """
     )
     suspend fun updatePendingToSuccessByDuplicateKey(
@@ -271,7 +278,29 @@ interface TransactionDao {
         }
     }
 
-    // --- Delete Operations ---
+    // --- Soft Delete, Restore & Trash Operations ---
+    @Query("SELECT * FROM transactions WHERE deletedAtMillis IS NOT NULL ORDER BY deletedAtMillis DESC, id DESC")
+    fun observeTrashedTransactions(): Flow<List<TransactionEntity>>
+
+    @Query("SELECT * FROM transactions WHERE deletedAtMillis IS NOT NULL ORDER BY deletedAtMillis DESC, id DESC")
+    suspend fun getTrashedTransactionsOnce(): List<TransactionEntity>
+
+    @Query("SELECT COUNT(*) FROM transactions WHERE deletedAtMillis IS NOT NULL")
+    fun observeTrashedCount(): Flow<Int>
+
+    @Query("UPDATE transactions SET deletedAtMillis = :deletedAtMillis WHERE id = :id")
+    suspend fun softDeleteTransaction(id: Long, deletedAtMillis: Long)
+
+    @Query("UPDATE transactions SET deletedAtMillis = NULL WHERE id = :id")
+    suspend fun restoreTransaction(id: Long)
+
+    @Query("DELETE FROM transactions WHERE deletedAtMillis IS NOT NULL")
+    suspend fun emptyTrash()
+
+    @Query("DELETE FROM transactions WHERE deletedAtMillis IS NOT NULL AND deletedAtMillis < :cutoffMillis")
+    suspend fun purgeTrashedOlderThan(cutoffMillis: Long): Int
+
+    // --- Hard Delete Operations (Intentionally Unfiltered so they remove trashed rows too) ---
     @Delete
     suspend fun deleteTransaction(transaction: TransactionEntity)
 

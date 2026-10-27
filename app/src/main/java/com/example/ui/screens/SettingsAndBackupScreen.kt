@@ -113,6 +113,7 @@ fun SettingsAndBackupScreen(
     onDeleteCategory: (CategoryEntity) -> Unit,
     onDeleteMerchantMemory: (normalizedMerchant: String) -> Unit,
     onOpenOnboardingClick: () -> Unit = {},
+    onOpenTrashClick: () -> Unit = {},
     notificationPermissionStatus: String = "ALLOWED",
     onRequestNotificationPermission: () -> Unit = {},
     onOpenAppSettings: () -> Unit = {},
@@ -256,6 +257,90 @@ fun SettingsAndBackupScreen(
                             onClick = onOpenOnboardingClick,
                             onColoredCard = true,
                             contentDescription = "Open guide",
+                            size = 40.dp
+                        )
+                    }
+                }
+            }
+        }
+
+        // 2b-trash. TRASH row (Pale Pink 3D Card with trashed payment count)
+        item(key = "settings_trash_card") {
+            Editorial3DLayerBox(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .staggeredScreenEntrance(screenKey = "settings", index = 3)
+                    .testTag("settings_trash_card"),
+                shape = RoundedCornerShape(22.dp),
+                extrusionColor = InkBlack,
+                extrusionBorderColor = InkBlack,
+                depthX = 4.dp,
+                depthY = 5.dp
+            ) {
+                Surface(
+                    onClick = onOpenTrashClick,
+                    modifier = Modifier.fillMaxWidth(),
+                    shape = RoundedCornerShape(22.dp),
+                    color = PalePinkTint,
+                    contentColor = InkBlack,
+                    border = BorderStroke(1.8.dp, InkBlack)
+                ) {
+                    Row(
+                        modifier = Modifier.padding(20.dp),
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.SpaceBetween
+                    ) {
+                        Row(
+                            verticalAlignment = Alignment.CenterVertically,
+                            horizontalArrangement = Arrangement.spacedBy(12.dp),
+                            modifier = Modifier.weight(1f)
+                        ) {
+                            Box(
+                                modifier = Modifier
+                                    .size(42.dp)
+                                    .clip(CircleShape)
+                                    .background(PureWhite)
+                                    .border(1.5.dp, InkBlack, CircleShape),
+                                contentAlignment = Alignment.Center
+                            ) {
+                                Icon(
+                                    imageVector = Icons.Default.Delete,
+                                    contentDescription = "Trash",
+                                    tint = InkBlack,
+                                    modifier = Modifier.size(20.dp)
+                                )
+                            }
+                            Column(modifier = Modifier.weight(1f)) {
+                                Row(
+                                    verticalAlignment = Alignment.CenterVertically,
+                                    horizontalArrangement = Arrangement.spacedBy(8.dp)
+                                ) {
+                                    Text(
+                                        text = "TRASH",
+                                        style = CondensedCardTitleStyle.copy(fontSize = 22.sp),
+                                        color = InkBlack
+                                    )
+                                    StatusPillBadge(
+                                        text = "${uiState.trashedCount}",
+                                        backgroundColor = PureWhite,
+                                        modifier = Modifier.testTag("settings_trash_count_badge")
+                                    )
+                                }
+                                Text(
+                                    text = if (uiState.trashedCount == 0) {
+                                        "No deleted payments · Kept for 30 days"
+                                    } else {
+                                        "${uiState.trashedCount} deleted payment${if (uiState.trashedCount == 1) "" else "s"} · Restore or delete forever"
+                                    },
+                                    style = MaterialTheme.typography.bodySmall.copy(fontWeight = FontWeight.SemiBold),
+                                    color = InkBlack.copy(alpha = 0.85f)
+                                )
+                            }
+                        }
+                        RoundArrowButton(
+                            onClick = onOpenTrashClick,
+                            onColoredCard = true,
+                            contentDescription = "Open Trash",
                             size = 40.dp
                         )
                     }

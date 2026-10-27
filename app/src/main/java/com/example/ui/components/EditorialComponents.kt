@@ -1,7 +1,9 @@
 package com.example.ui.components
 
 import androidx.compose.animation.AnimatedContent
+import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.animation.animateColorAsState
+import androidx.compose.animation.animateContentSize
 import androidx.compose.animation.core.Animatable
 import androidx.compose.animation.core.FastOutSlowInEasing
 import androidx.compose.animation.core.RepeatMode
@@ -16,6 +18,8 @@ import androidx.compose.animation.fadeIn
 import androidx.compose.animation.fadeOut
 import androidx.compose.animation.scaleIn
 import androidx.compose.animation.scaleOut
+import androidx.compose.animation.slideInVertically
+import androidx.compose.animation.slideOutVertically
 import androidx.compose.animation.togetherWith
 import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.Canvas
@@ -73,6 +77,7 @@ import androidx.compose.material3.minimumInteractiveComponentSize
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.key
 import androidx.compose.runtime.mutableFloatStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
@@ -1250,147 +1255,29 @@ fun Playful3DCircleActionButton(
  * - Front Sunny Yellow (#FFD23F) zig-zag receipt card with Mint (#9FE3C0) header and bold black ₹ symbol
  * - Floating Aqua (#8FE3F0) 4-point AI scan star in the top-right corner
  */
+/**
+ * Custom 3D SnapSpend Brand Logo Emblem used in the Top Bar:
+ * - Displays the official SnapSpend app logo from logo.svg
+ */
 @Composable
 fun YuProfileAvatarCircle(size: Dp = 46.dp) {
-    val badgeShape = RoundedCornerShape(15.dp)
-    Box(
-        modifier = Modifier.size(size + 4.dp),
-        contentAlignment = Alignment.Center
+    val badgeShape = RoundedCornerShape(13.dp)
+    Editorial3DLayerBox(
+        modifier = Modifier.size(size),
+        shape = badgeShape,
+        depthX = 2.dp,
+        depthY = 3.dp,
+        extrusionColor = InkBlack,
+        extrusionBorderColor = InkBlack
     ) {
-        // 3D offset shadow base
-        Box(
+        androidx.compose.foundation.Image(
+            painter = androidx.compose.ui.res.painterResource(id = com.example.R.drawable.snapspend_logo),
+            contentDescription = "SnapSpend Logo",
             modifier = Modifier
-                .size(size)
-                .offset(x = 2.dp, y = 3.dp)
+                .fillMaxSize()
                 .clip(badgeShape)
-                .background(InkBlack)
+                .border(1.5.dp, InkBlack, badgeShape)
         )
-        Box(
-            modifier = Modifier
-                .size(size)
-                .clip(badgeShape)
-                .background(Color(0xFF12121A))
-                .border(1.8.dp, InkBlack, badgeShape),
-            contentAlignment = Alignment.Center
-        ) {
-            Canvas(modifier = Modifier.fillMaxSize()) {
-                val w = this.size.width
-                val h = this.size.height
-                val stroke = Stroke(width = 1.6.dp.toPx(), cap = StrokeCap.Round, join = StrokeJoin.Round)
-
-                // 1. Back Periwinkle Indigo stacked tab
-                drawRoundRect(
-                    color = PeriwinkleIndigo,
-                    topLeft = Offset(w * 0.16f, h * 0.18f),
-                    size = Size(w * 0.48f, h * 0.52f),
-                    cornerRadius = CornerRadius(4.dp.toPx(), 4.dp.toPx())
-                )
-                drawRoundRect(
-                    color = InkBlack,
-                    topLeft = Offset(w * 0.16f, h * 0.18f),
-                    size = Size(w * 0.48f, h * 0.52f),
-                    cornerRadius = CornerRadius(4.dp.toPx(), 4.dp.toPx()),
-                    style = stroke
-                )
-
-                // 2. Middle Coral stacked card
-                drawRoundRect(
-                    color = EditorialCoral,
-                    topLeft = Offset(w * 0.22f, h * 0.23f),
-                    size = Size(w * 0.50f, h * 0.52f),
-                    cornerRadius = CornerRadius(5.dp.toPx(), 5.dp.toPx())
-                )
-                drawRoundRect(
-                    color = InkBlack,
-                    topLeft = Offset(w * 0.22f, h * 0.23f),
-                    size = Size(w * 0.50f, h * 0.52f),
-                    cornerRadius = CornerRadius(5.dp.toPx(), 5.dp.toPx()),
-                    style = stroke
-                )
-
-                // 3. 3D Ink-Black shadow behind front Sunny Yellow receipt
-                val shadowReceiptPath = Path().apply {
-                    moveTo(w * 0.33f, h * 0.26f)
-                    lineTo(w * 0.79f, h * 0.26f)
-                    lineTo(w * 0.79f, h * 0.84f)
-                    lineTo(w * 0.71f, h * 0.78f)
-                    lineTo(w * 0.63f, h * 0.84f)
-                    lineTo(w * 0.56f, h * 0.78f)
-                    lineTo(w * 0.48f, h * 0.84f)
-                    lineTo(w * 0.40f, h * 0.78f)
-                    lineTo(w * 0.33f, h * 0.84f)
-                    close()
-                }
-                drawPath(path = shadowReceiptPath, color = InkBlack)
-
-                // 4. Front Sunny Yellow (#FFD23F) zig-zag receipt card
-                val receiptPath = Path().apply {
-                    moveTo(w * 0.29f, h * 0.22f)
-                    lineTo(w * 0.75f, h * 0.22f)
-                    lineTo(w * 0.75f, h * 0.80f)
-                    lineTo(w * 0.67f, h * 0.74f)
-                    lineTo(w * 0.59f, h * 0.80f)
-                    lineTo(w * 0.52f, h * 0.74f)
-                    lineTo(w * 0.44f, h * 0.80f)
-                    lineTo(w * 0.36f, h * 0.74f)
-                    lineTo(w * 0.29f, h * 0.80f)
-                    close()
-                }
-                drawPath(path = receiptPath, color = SunnyYellow)
-                drawPath(path = receiptPath, color = InkBlack, style = stroke)
-
-                // 5. Mint (#9FE3C0) top receipt header strip
-                drawRoundRect(
-                    color = EditorialMint,
-                    topLeft = Offset(w * 0.34f, h * 0.27f),
-                    size = Size(w * 0.36f, h * 0.08f),
-                    cornerRadius = CornerRadius(2.dp.toPx(), 2.dp.toPx())
-                )
-
-                // 6. Bold Indian Rupee (₹) symbol on the Sunny Yellow receipt
-                val rupeeStroke = Stroke(width = 2.1.dp.toPx(), cap = StrokeCap.Round, join = StrokeJoin.Round)
-                val rupeePath = Path().apply {
-                    // Top bar
-                    moveTo(w * 0.41f, h * 0.42f)
-                    lineTo(w * 0.63f, h * 0.42f)
-                    // Middle bar
-                    moveTo(w * 0.41f, h * 0.50f)
-                    lineTo(w * 0.61f, h * 0.50f)
-                    // Curved loop + diagonal leg
-                    moveTo(w * 0.51f, h * 0.42f)
-                    cubicTo(
-                        w * 0.60f, h * 0.42f,
-                        w * 0.60f, h * 0.58f,
-                        w * 0.44f, h * 0.58f
-                    )
-                    lineTo(w * 0.59f, h * 0.69f)
-                }
-                drawPath(path = rupeePath, color = InkBlack, style = rupeeStroke)
-
-                // 7. Aqua (#8FE3F0) 4-point AI scan star in top-right corner
-                val starCx = w * 0.77f
-                val starCy = h * 0.23f
-                val outerR = w * 0.14f
-                val innerR = w * 0.05f
-                val starPath = Path().apply {
-                    moveTo(starCx, starCy - outerR)
-                    lineTo(starCx + innerR, starCy - innerR)
-                    lineTo(starCx + outerR, starCy)
-                    lineTo(starCx + innerR, starCy + innerR)
-                    lineTo(starCx, starCy + outerR)
-                    lineTo(starCx - innerR, starCy + innerR)
-                    lineTo(starCx - outerR, starCy)
-                    lineTo(starCx - innerR, starCy - innerR)
-                    close()
-                }
-                drawPath(path = starPath, color = EditorialAqua)
-                drawPath(
-                    path = starPath,
-                    color = InkBlack,
-                    style = Stroke(width = 1.2.dp.toPx(), join = StrokeJoin.Round)
-                )
-            }
-        }
     }
 }
 
@@ -1924,12 +1811,15 @@ fun StackedPastelTransactionDeck(
     categories: List<CategoryEntity> = emptyList(),
     highlightTopCardInLime: Boolean = true
 ) {
+    val reducedMotion = LocalReducedMotion.current
     val categoryMap = remember(categories) {
         categories.associateBy { it.name.lowercase() }
     }
 
     Column(
-        modifier = modifier.fillMaxWidth(),
+        modifier = modifier
+            .fillMaxWidth()
+            .animateContentSize(animationSpec = Motion.physicalIntSizeSpring(reducedMotion)),
         verticalArrangement = Arrangement.spacedBy(12.dp)
     ) {
         var previousCardTint: Color? = null
@@ -1944,18 +1834,20 @@ fun StackedPastelTransactionDeck(
             }
             previousCardTint = resolvedPaleTint
 
-            EditorialTransactionCard(
-                transaction = tx,
-                cardColor = resolvedPaleTint,
-                categoryDotColor = dotColor,
-                accentExtrusionColor = InkBlack,
-                isHeroCard = highlightTopCardInLime && index == 0,
-                onColoredCard = true,
-                avatarBadgeColor = dotColor,
-                staticTiltX = 0f,
-                onClick = { onTransactionClick(tx) },
-                modifier = Modifier.zIndex((transactions.size - index).toFloat())
-            )
+            key(tx.id) {
+                EditorialTransactionCard(
+                    transaction = tx,
+                    cardColor = resolvedPaleTint,
+                    categoryDotColor = dotColor,
+                    accentExtrusionColor = InkBlack,
+                    isHeroCard = highlightTopCardInLime && index == 0,
+                    onColoredCard = true,
+                    avatarBadgeColor = dotColor,
+                    staticTiltX = 0f,
+                    onClick = { onTransactionClick(tx) },
+                    modifier = Modifier.zIndex((transactions.size - index).toFloat())
+                )
+            }
         }
     }
 }
@@ -1974,12 +1866,15 @@ fun SeparatedPastelTransactionList(
     categories: List<CategoryEntity> = emptyList(),
     highlightFirstCardInLime: Boolean = false
 ) {
+    val reducedMotion = LocalReducedMotion.current
     val categoryMap = remember(categories) {
         categories.associateBy { it.name.lowercase() }
     }
 
     Column(
-        modifier = modifier.fillMaxWidth(),
+        modifier = modifier
+            .fillMaxWidth()
+            .animateContentSize(animationSpec = Motion.physicalIntSizeSpring(reducedMotion)),
         verticalArrangement = Arrangement.spacedBy(12.dp)
     ) {
         var previousCardTint: Color? = null
@@ -1994,16 +1889,18 @@ fun SeparatedPastelTransactionList(
             }
             previousCardTint = resolvedPaleTint
 
-            EditorialTransactionCard(
-                transaction = tx,
-                cardColor = resolvedPaleTint,
-                categoryDotColor = dotColor,
-                accentExtrusionColor = InkBlack,
-                isHeroCard = highlightFirstCardInLime && index == 0,
-                onColoredCard = true,
-                avatarBadgeColor = dotColor,
-                onClick = { onTransactionClick(tx) }
-            )
+            key(tx.id) {
+                EditorialTransactionCard(
+                    transaction = tx,
+                    cardColor = resolvedPaleTint,
+                    categoryDotColor = dotColor,
+                    accentExtrusionColor = InkBlack,
+                    isHeroCard = highlightFirstCardInLime && index == 0,
+                    onColoredCard = true,
+                    avatarBadgeColor = dotColor,
+                    onClick = { onTransactionClick(tx) }
+                )
+            }
         }
     }
 }
@@ -2236,3 +2133,95 @@ fun categoryIconVector(category: String, type: TransactionType = TransactionType
         else -> Icons.Default.Storefront
     }
 }
+
+/**
+ * 6-second Editorial Aqua (#8FE3F0) UNDO bar displayed above the bottom navigation bar
+ * whenever a payment is soft-deleted ("Payment deleted · UNDO") or added via Quick Repeat ("Added Chai ₹20 · UNDO").
+ */
+@Composable
+fun EditorialAquaUndoBar(
+    message: String,
+    actionToken: Long,
+    onUndoClick: () -> Unit,
+    onAutoDismiss: (Long) -> Unit,
+    modifier: Modifier = Modifier
+) {
+    val view = LocalView.current
+
+    LaunchedEffect(actionToken) {
+        kotlinx.coroutines.delay(6000L)
+        onAutoDismiss(actionToken)
+    }
+
+    Editorial3DLayerBox(
+        modifier = modifier
+            .fillMaxWidth()
+            .testTag("aqua_undo_bar"),
+        shape = CircleShape,
+        extrusionColor = InkBlack,
+        extrusionBorderColor = InkBlack,
+        depthX = 3.dp,
+        depthY = 4.dp
+    ) {
+        Surface(
+            modifier = Modifier.fillMaxWidth(),
+            shape = CircleShape,
+            color = EditorialAqua,
+            contentColor = InkBlack,
+            border = BorderStroke(1.8.dp, InkBlack)
+        ) {
+            Row(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(start = 18.dp, end = 8.dp, top = 7.dp, bottom = 7.dp),
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.SpaceBetween
+            ) {
+                Row(
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.spacedBy(8.dp),
+                    modifier = Modifier.weight(1f)
+                ) {
+                    Icon(
+                        imageVector = Icons.Default.Replay,
+                        contentDescription = null,
+                        tint = InkBlack,
+                        modifier = Modifier.size(18.dp)
+                    )
+                    Text(
+                        text = "$message · UNDO",
+                        style = MaterialTheme.typography.bodyMedium.copy(fontWeight = FontWeight.ExtraBold),
+                        color = InkBlack,
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis,
+                        modifier = Modifier.testTag("aqua_undo_bar_text")
+                    )
+                }
+
+                Surface(
+                    onClick = {
+                        Motion.performLightTapHaptic(view)
+                        onUndoClick()
+                    },
+                    modifier = Modifier
+                        .minimumInteractiveComponentSize()
+                        .testTag("aqua_undo_button"),
+                    shape = CircleShape,
+                    color = InkBlack,
+                    contentColor = PureWhite
+                ) {
+                    Text(
+                        text = "UNDO",
+                        modifier = Modifier.padding(horizontal = 16.dp, vertical = 8.dp),
+                        style = MaterialTheme.typography.labelLarge.copy(
+                            fontWeight = FontWeight.ExtraBold,
+                            letterSpacing = 0.6.sp
+                        ),
+                        color = PureWhite
+                    )
+                }
+            }
+        }
+    }
+}
+

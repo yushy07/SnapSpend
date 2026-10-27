@@ -6,6 +6,8 @@ import androidx.room.Room
 import androidx.room.RoomDatabase
 import androidx.room.TypeConverter
 import androidx.room.TypeConverters
+import androidx.room.migration.Migration
+import androidx.sqlite.db.SupportSQLiteDatabase
 
 class SnapSpendConverters {
     @TypeConverter
@@ -52,8 +54,8 @@ class SnapSpendConverters {
         BudgetEntity::class,
         RepeatingPaymentEntity::class
     ],
-    version = 2,
-    exportSchema = false
+    version = 3,
+    exportSchema = true
 )
 @TypeConverters(SnapSpendConverters::class)
 abstract class AppDatabase : RoomDatabase() {
@@ -62,6 +64,12 @@ abstract class AppDatabase : RoomDatabase() {
     abstract fun categoryDao(): CategoryDao
 
     companion object {
+        val MIGRATION_2_3 = object : Migration(2, 3) {
+            override fun migrate(db: SupportSQLiteDatabase) {
+                db.execSQL("ALTER TABLE transactions ADD COLUMN deletedAtMillis INTEGER DEFAULT NULL")
+            }
+        }
+
         @Volatile
         private var INSTANCE: AppDatabase? = null
 
@@ -72,7 +80,7 @@ abstract class AppDatabase : RoomDatabase() {
                     AppDatabase::class.java,
                     "snapspend_local.db"
                 )
-                    .fallbackToDestructiveMigration(true)
+                    .addMigrations(MIGRATION_2_3)
                     .build()
                     .also { INSTANCE = it }
             }
