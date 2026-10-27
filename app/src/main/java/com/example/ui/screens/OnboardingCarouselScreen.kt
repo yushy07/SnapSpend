@@ -65,11 +65,15 @@ import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.DisposableEffect
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableFloatStateOf
+import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
+import com.example.ui.sound.LocalRetroSoundManager
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
@@ -123,8 +127,25 @@ fun OnboardingCarouselScreen(
     val coroutineScope = rememberCoroutineScope()
     val reducedMotion = LocalReducedMotion.current
     val view = LocalView.current
+    val soundManager = LocalRetroSoundManager.current
+
+    DisposableEffect(Unit) {
+        soundManager?.startCarouselBgm()
+        onDispose {
+            soundManager?.startMainBgm()
+        }
+    }
+
+    var previousPage by remember { mutableStateOf(pagerState.currentPage) }
+    LaunchedEffect(pagerState.currentPage) {
+        if (pagerState.currentPage != previousPage) {
+            previousPage = pagerState.currentPage
+            soundManager?.playSwoosh()
+        }
+    }
 
     BackHandler {
+        soundManager?.playButtonBlip()
         if (pagerState.currentPage > 0) {
             coroutineScope.launch {
                 pagerState.animateScrollToPage(pagerState.currentPage - 1)
@@ -211,6 +232,7 @@ fun OnboardingCarouselScreen(
                     OnboardingSkipPill(
                         onClick = {
                             Motion.performLightTapHaptic(view)
+                            soundManager?.playButtonBlip()
                             onFinish()
                         }
                     )
@@ -274,6 +296,7 @@ fun OnboardingCarouselScreen(
                     label = if (isLastSlide) "GET STARTED" else "NEXT",
                     onClick = {
                         Motion.performLightTapHaptic(view)
+                        soundManager?.playButtonBlip()
                         if (isLastSlide) {
                             onFinish()
                         } else {

@@ -244,8 +244,32 @@ class MainActivity : ComponentActivity() {
                 }
             }
             val soundEffectsEnabled by viewModel.soundEffectsEnabled.collectAsStateWithLifecycle()
+            val bgmEnabled by viewModel.bgmEnabled.collectAsStateWithLifecycle()
             androidx.compose.runtime.LaunchedEffect(soundEffectsEnabled) {
-                soundManager.setEnabled(soundEffectsEnabled)
+                soundManager.setSoundEnabled(soundEffectsEnabled)
+            }
+            androidx.compose.runtime.LaunchedEffect(bgmEnabled) {
+                soundManager.setBgmEnabled(bgmEnabled)
+            }
+            androidx.compose.runtime.LaunchedEffect(hasSeenOnboarding) {
+                if (hasSeenOnboarding == true) {
+                    soundManager.startMainBgm()
+                }
+            }
+
+            val lifecycleOwner = LocalLifecycleOwner.current
+            DisposableEffect(lifecycleOwner) {
+                val observer = LifecycleEventObserver { _, event ->
+                    when (event) {
+                        Lifecycle.Event.ON_PAUSE, Lifecycle.Event.ON_STOP -> soundManager.onPauseLifecycle()
+                        Lifecycle.Event.ON_RESUME -> soundManager.onResumeLifecycle()
+                        else -> {}
+                    }
+                }
+                lifecycleOwner.lifecycle.addObserver(observer)
+                onDispose {
+                    lifecycleOwner.lifecycle.removeObserver(observer)
+                }
             }
 
             CompositionLocalProvider(LocalRetroSoundManager provides soundManager) {
@@ -314,6 +338,7 @@ fun SnapSpendRootScreen(
     val dataCheckSnapshot by viewModel.dataCheckSnapshot.collectAsStateWithLifecycle()
     val pendingSharedPayload by viewModel.pendingSharedPayload.collectAsStateWithLifecycle()
     val soundEffectsEnabled by viewModel.soundEffectsEnabled.collectAsStateWithLifecycle()
+    val bgmEnabled by viewModel.bgmEnabled.collectAsStateWithLifecycle()
 
     androidx.compose.runtime.LaunchedEffect(scanState) {
         when (scanState) {
@@ -903,6 +928,8 @@ fun SnapSpendRootScreen(
                                             onThemeModeChange = viewModel::setThemeMode,
                                             soundEffectsEnabled = soundEffectsEnabled,
                                             onSoundEffectsEnabledChange = viewModel::setSoundEffectsEnabled,
+                                            bgmEnabled = bgmEnabled,
+                                            onBgmEnabledChange = viewModel::setBgmEnabled,
                                             onConnectGoogleClick = { viewModel.connectGoogleAccount(activity) },
                                             onDisconnectGoogleClick = viewModel::disconnectGoogleAccount,
                                             onBackupNowClick = viewModel::triggerDriveBackupNow,

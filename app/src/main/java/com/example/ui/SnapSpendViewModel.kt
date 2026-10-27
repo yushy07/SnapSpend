@@ -189,6 +189,9 @@ class SnapSpendViewModel(application: Application) : AndroidViewModel(applicatio
     private val _soundEffectsEnabled = MutableStateFlow(loadPersistedSoundEffectsEnabled())
     val soundEffectsEnabled: StateFlow<Boolean> = _soundEffectsEnabled.asStateFlow()
 
+    private val _bgmEnabled = MutableStateFlow(loadPersistedBgmEnabled())
+    val bgmEnabled: StateFlow<Boolean> = _bgmEnabled.asStateFlow()
+
     private val _queuedScans = MutableStateFlow<List<QueuedScanTask>>(emptyList())
     val queuedScans: StateFlow<List<QueuedScanTask>> = _queuedScans.asStateFlow()
 
@@ -323,6 +326,19 @@ class SnapSpendViewModel(application: Application) : AndroidViewModel(applicatio
 
     fun toggleSoundEffectsEnabled() {
         setSoundEffectsEnabled(!_soundEffectsEnabled.value)
+    }
+
+    private fun loadPersistedBgmEnabled(): Boolean {
+        return prefs.getBoolean("bgm_enabled", true)
+    }
+
+    fun setBgmEnabled(enabled: Boolean) {
+        _bgmEnabled.value = enabled
+        prefs.edit().putBoolean("bgm_enabled", enabled).apply()
+    }
+
+    fun toggleBgmEnabled() {
+        setBgmEnabled(!_bgmEnabled.value)
     }
 
     private val coreDataFlow = combine(

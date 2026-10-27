@@ -21,6 +21,7 @@ import androidx.compose.foundation.clickable
 import androidx.compose.foundation.gestures.detectHorizontalDragGestures
 import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.interaction.collectIsPressedAsState
+import com.example.ui.sound.LocalRetroSoundManager
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.BoxWithConstraints
@@ -786,6 +787,7 @@ private fun SwipeableCategoryFolderDeck(
     val density = LocalDensity.current
     val densityFactor = density.density
     val haptic = LocalHapticFeedback.current
+    val soundManager = LocalRetroSoundManager.current
     val coroutineScope = rememberCoroutineScope()
 
     val deckSize = categories.size
@@ -812,6 +814,7 @@ private fun SwipeableCategoryFolderDeck(
             return
         }
         isAnimatingSwipe = true
+        soundManager?.playSwoosh()
         val outgoingItem = categories.getOrNull(selectedIndex)
         val targetFlyX = directionSign * (cardWidthPx * 1.12f)
 

@@ -31,6 +31,8 @@ import androidx.compose.material.icons.filled.Download
 import androidx.compose.material.icons.filled.Edit
 import androidx.compose.material.icons.filled.FactCheck
 import androidx.compose.material.icons.filled.Layers
+import androidx.compose.material.icons.filled.MusicNote
+import androidx.compose.material.icons.filled.MusicOff
 import androidx.compose.material.icons.filled.Restore
 import androidx.compose.material.icons.filled.UploadFile
 import androidx.compose.material3.AlertDialog
@@ -108,6 +110,8 @@ fun SettingsAndBackupScreen(
     onThemeModeChange: (ThemeMode) -> Unit = {},
     soundEffectsEnabled: Boolean = true,
     onSoundEffectsEnabledChange: (Boolean) -> Unit = {},
+    bgmEnabled: Boolean = true,
+    onBgmEnabledChange: (Boolean) -> Unit = {},
     onConnectGoogleClick: () -> Unit,
     onDisconnectGoogleClick: () -> Unit,
     onBackupNowClick: () -> Unit,
@@ -299,7 +303,60 @@ fun SettingsAndBackupScreen(
                             optionTestTagProvider = { if (it) "sound_option_enabled" else "sound_option_muted" }
                         )
 
-                        Spacer(modifier = Modifier.height(14.dp))
+                        Spacer(modifier = Modifier.height(18.dp))
+
+                        // Background Music Section
+                        Row(
+                            modifier = Modifier.fillMaxWidth(),
+                            horizontalArrangement = Arrangement.SpaceBetween,
+                            verticalAlignment = Alignment.CenterVertically
+                        ) {
+                            Column(modifier = Modifier.weight(1f)) {
+                                TinySectionLabel(
+                                    text = "AMBIENT SOUNDTRACK",
+                                    color = InkBlack.copy(alpha = 0.72f)
+                                )
+                                Spacer(modifier = Modifier.height(4.dp))
+                                Text(
+                                    text = "BACKGROUND MUSIC",
+                                    style = CondensedCardTitleStyle.copy(fontSize = 24.sp),
+                                    color = InkBlack
+                                )
+                            }
+                            Box(
+                                modifier = Modifier
+                                    .size(38.dp)
+                                    .clip(CircleShape)
+                                    .background(if (bgmEnabled) SunnyYellow else Color(0xFFD6D6DF))
+                                    .border(BorderStroke(1.8.dp, InkBlack), CircleShape),
+                                contentAlignment = Alignment.Center
+                            ) {
+                                Icon(
+                                    imageVector = if (bgmEnabled) Icons.Filled.MusicNote else Icons.Filled.MusicOff,
+                                    contentDescription = if (bgmEnabled) "Music on" else "Music paused",
+                                    tint = InkBlack,
+                                    modifier = Modifier.size(20.dp)
+                                )
+                            }
+                        }
+                        Text(
+                            text = "Cozy looping lo-fi electronic melody playing throughout the app",
+                            style = MaterialTheme.typography.bodySmall.copy(fontWeight = FontWeight.SemiBold),
+                            color = InkBlack.copy(alpha = 0.80f)
+                        )
+                        Spacer(modifier = Modifier.height(12.dp))
+                        SegmentedPillToggle(
+                            options = listOf(true, false),
+                            selectedOption = bgmEnabled,
+                            labelProvider = { if (it) "ON (PLAYING)" else "PAUSED" },
+                            onOptionSelected = { enabled ->
+                                onBgmEnabledChange(enabled)
+                                soundManager?.setBgmEnabled(enabled)
+                            },
+                            optionTestTagProvider = { if (it) "bgm_option_playing" else "bgm_option_paused" }
+                        )
+
+                        Spacer(modifier = Modifier.height(16.dp))
                         Text(
                             text = "TAP TO TEST SOUNDS",
                             style = MaterialTheme.typography.labelSmall.copy(fontWeight = FontWeight.Black, letterSpacing = 1.sp),
@@ -308,7 +365,7 @@ fun SettingsAndBackupScreen(
                         Spacer(modifier = Modifier.height(8.dp))
                         Row(
                             modifier = Modifier.fillMaxWidth(),
-                            horizontalArrangement = Arrangement.spacedBy(8.dp)
+                            horizontalArrangement = Arrangement.spacedBy(6.dp)
                         ) {
                             // Test Coin
                             Surface(
@@ -340,6 +397,22 @@ fun SettingsAndBackupScreen(
                             ) {
                                 Box(contentAlignment = Alignment.Center) {
                                     Text("BLIP", style = MaterialTheme.typography.labelSmall.copy(fontWeight = FontWeight.Black))
+                                }
+                            }
+                            // Test Swoosh
+                            Surface(
+                                onClick = { soundManager?.playSwoosh() },
+                                shape = CircleShape,
+                                color = PaleLavenderTint,
+                                contentColor = InkBlack,
+                                border = BorderStroke(1.5.dp, InkBlack),
+                                modifier = Modifier
+                                    .weight(1f)
+                                    .height(38.dp)
+                                    .testTag("test_sound_swoosh")
+                            ) {
+                                Box(contentAlignment = Alignment.Center) {
+                                    Text("SWOOSH", style = MaterialTheme.typography.labelSmall.copy(fontWeight = FontWeight.Black))
                                 }
                             }
                             // Test Warp

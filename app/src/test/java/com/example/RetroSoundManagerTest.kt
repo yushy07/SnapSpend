@@ -94,4 +94,25 @@ class RetroSoundManagerTest {
         assertNotNull(bytes)
         assertValidWav(bytes, 0.12)
     }
+
+    @Test
+    fun testSynthesizeSwooshWav() {
+        val bytes = RetroSoundManager.synthesizeSwooshWav()
+        assertNotNull(bytes)
+        assertValidWav(bytes, 0.08)
+    }
+
+    @Test
+    fun testSynthesizeLoFiBgmWav() {
+        val bytes = RetroSoundManager.synthesizeLoFiBgmWav()
+        assertNotNull(bytes)
+        assertValidWav(bytes, 4.0)
+    }
+
+    @Test
+    fun testSynthesizeCarouselIntroWav() {
+        val bytes = RetroSoundManager.synthesizeCarouselIntroWav()
+        assertNotNull(bytes)
+        assertValidWav(bytes, 3.0)
+    }
 }
