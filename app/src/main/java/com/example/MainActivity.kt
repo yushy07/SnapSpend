@@ -31,6 +31,7 @@ import androidx.compose.animation.slideInHorizontally
 import androidx.compose.animation.togetherWith
 import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.background
+import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.interaction.collectIsPressedAsState
@@ -58,12 +59,17 @@ import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.automirrored.filled.FormatListBulleted
 import androidx.compose.material.icons.filled.Add
-import androidx.compose.material.icons.filled.BarChart
-import androidx.compose.material.icons.filled.Category
+import androidx.compose.material.icons.filled.Folder
 import androidx.compose.material.icons.filled.Home
+import androidx.compose.material.icons.filled.PieChart
+import androidx.compose.material.icons.filled.ReceiptLong
 import androidx.compose.material.icons.filled.Settings
+import androidx.compose.material.icons.outlined.Folder
+import androidx.compose.material.icons.outlined.Home
+import androidx.compose.material.icons.outlined.PieChart
+import androidx.compose.material.icons.outlined.ReceiptLong
+import androidx.compose.material.icons.outlined.Settings
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
@@ -87,6 +93,7 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.draw.scale
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
@@ -109,6 +116,7 @@ import androidx.core.view.WindowCompat
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.example.data.local.CategoryType
 import com.example.data.local.TransactionEntity
+import com.example.data.local.TransactionStatus
 import com.example.ui.ScanUiState
 import com.example.ui.SnapSpendViewModel
 import com.example.ui.components.Editorial3DLayerBox
@@ -130,6 +138,9 @@ import com.example.ui.theme.DarkCardSurface
 import com.example.ui.theme.DarkSubtleBorder
 import com.example.ui.theme.EditorialAqua
 import com.example.ui.theme.EditorialBg
+import com.example.ui.theme.EditorialCoral
+import com.example.ui.theme.EditorialLavender
+import com.example.ui.theme.EditorialMint
 import com.example.ui.theme.InkBlack
 import androidx.compose.ui.layout.onGloballyPositioned
 import androidx.compose.ui.layout.positionInParent
@@ -163,12 +174,20 @@ import java.io.File
 import kotlin.math.roundToInt
 import kotlinx.coroutines.delay
 
-enum class SnapSpendTab(val label: String, val icon: ImageVector, val testTag: String) {
-    HOME("Home", Icons.Default.Home, "nav_tab_home"),
-    CHARTS("Charts", Icons.Default.BarChart, "nav_tab_charts"),
-    CATEGORIES("Categories", Icons.Default.Category, "nav_tab_categories"),
-    TRANSACTIONS("Transactions", Icons.AutoMirrored.Filled.FormatListBulleted, "nav_tab_transactions"),
-    SETTINGS("Settings", Icons.Default.Settings, "nav_tab_settings")
+enum class SnapSpendTab(
+    val label: String,
+    val selectedIcon: ImageVector,
+    val unselectedIcon: ImageVector,
+    val activeAccentColor: Color,
+    val testTag: String
+) {
+    HOME("Home", Icons.Filled.Home, Icons.Outlined.Home, SunnyYellow, "nav_tab_home"),
+    CHARTS("Charts", Icons.Filled.PieChart, Icons.Outlined.PieChart, EditorialCoral, "nav_tab_charts"),
+    CATEGORIES("Categories", Icons.Filled.Folder, Icons.Outlined.Folder, EditorialAqua, "nav_tab_categories"),
+    TRANSACTIONS("Transactions", Icons.Filled.ReceiptLong, Icons.Outlined.ReceiptLong, EditorialMint, "nav_tab_transactions"),
+    SETTINGS("Settings", Icons.Filled.Settings, Icons.Outlined.Settings, EditorialLavender, "nav_tab_settings");
+
+    val icon: ImageVector get() = selectedIcon
 }
 
 class MainActivity : ComponentActivity() {
@@ -579,7 +598,10 @@ fun SnapSpendRootScreen(
                     bottomBar = {
                         EditorialBottomNavBar(
                             currentTab = currentTab,
-                            onTabSelected = { currentTab = it }
+                            onTabSelected = { currentTab = it },
+                            isDark = isDark,
+                            pendingTransactionCount = uiState.allTransactions.count { it.status == TransactionStatus.PENDING },
+                            hasBudgetWarning = uiState.activeBudgetAlerts.isNotEmpty() || uiState.budgetStatuses.any { it.isWarning80 || it.isExceeded100 }
                         )
                     }
                 ) { innerPadding ->
@@ -1123,15 +1145,22 @@ fun SnapSpendRootScreen(
 }
 
 /**
- * Bottom Navigation Bar:
- * - A black rounded bar (#1D1D28) with 3D extruded shadow base
- * - The selected tab sits in an Aqua (#8FE3F0) 3D rounded pill with a black icon AND its text label
- * - Unselected tabs are plain white icons (#FFFFFF)
+ * Adaptive 3D Editorial Bottom Navigation Bar:
+ * - Icon-only layout (no text labels) with equal-width slots and a centered 3D sliding pill
+ * - In Light Mode: Editorial warm cream (#F3EEE3) surface with crisp Ink Black (#0B0B0B) borders,
+ *   3.5dp black 3D shadow extrusion, and black line icons.
+ * - In Dark Mode: Dark obsidian (#14141E) surface with slate borders, deep shadow extrusion,
+ *   and icons styled in warm peach puff (#FFDAB9).
+ * - Active icon switches to a filled icon with a 1.15x spring scale bounce on selection.
+ * - Micro-alert badges indicate pending transactions and budget warnings.
  */
 @Composable
 private fun EditorialBottomNavBar(
     currentTab: SnapSpendTab,
-    onTabSelected: (SnapSpendTab) -> Unit
+    onTabSelected: (SnapSpendTab) -> Unit,
+    isDark: Boolean = true,
+    pendingTransactionCount: Int = 0,
+    hasBudgetWarning: Boolean = false
 ) {
     val view = LocalView.current
     val density = LocalDensity.current
@@ -1139,165 +1168,232 @@ private fun EditorialBottomNavBar(
     val tabs = SnapSpendTab.entries
     val selectedIndex = tabs.indexOf(currentTab).coerceAtLeast(0)
 
-    // Measure each tab item's X offset & width inside the row so the Aqua pill slides smoothly to the selected tab
+    val peachPuff = Color(0xFFFFDAB9)
+
+    // Animated container theme colors
+    val animatedBarBg by animateColorAsState(
+        targetValue = if (isDark) Color(0xFF14141E) else EditorialBg,
+        animationSpec = Motion.quickTween(reducedMotion),
+        label = "navBarBg"
+    )
+    val animatedBarBorder by animateColorAsState(
+        targetValue = if (isDark) Color(0xFF2E2E40) else InkBlack,
+        animationSpec = Motion.quickTween(reducedMotion),
+        label = "navBarBorder"
+    )
+    val animatedExtrusionColor by animateColorAsState(
+        targetValue = if (isDark) Color(0xFF09090E) else InkBlack,
+        animationSpec = Motion.quickTween(reducedMotion),
+        label = "navBarExtrusion"
+    )
+
+    // Animated pill theme colors
+    val targetPillBg = if (isDark) {
+        Color(0xFF262338)
+    } else {
+        currentTab.activeAccentColor
+    }
+    val targetPillBorder = if (isDark) {
+        peachPuff
+    } else {
+        InkBlack
+    }
+    val animatedPillBg by animateColorAsState(
+        targetValue = targetPillBg,
+        animationSpec = Motion.quickTween(reducedMotion),
+        label = "navBarPillBg"
+    )
+    val animatedPillBorder by animateColorAsState(
+        targetValue = targetPillBorder,
+        animationSpec = Motion.quickTween(reducedMotion),
+        label = "navBarPillBorder"
+    )
+
+    // Measure tab offsets for smooth sliding pill
     val tabOffsetsPx = remember { IntArray(tabs.size) }
     val tabWidthsPx = remember { IntArray(tabs.size) }
     var hasMeasuredTabs by remember { mutableStateOf(false) }
 
-    val targetPillOffsetDp = with(density) { tabOffsetsPx[selectedIndex].toDp() }
-    val targetPillWidthDp = with(density) { tabWidthsPx[selectedIndex].coerceAtLeast(1).toDp() }
+    val pillWidthDp = 52.dp
+    val pillHeightDp = 42.dp
+
+    val targetPillOffsetDp = with(density) {
+        val tabOffset = tabOffsetsPx[selectedIndex].toDp()
+        val tabWidth = tabWidthsPx[selectedIndex].toDp()
+        tabOffset + (tabWidth - pillWidthDp) / 2
+    }
 
     val animatedPillOffsetX by animateDpAsState(
-        targetValue = targetPillOffsetDp,
+        targetValue = if (hasMeasuredTabs) targetPillOffsetDp else 0.dp,
         animationSpec = Motion.physicalSpring(reducedMotion),
-        label = "bottomNavAquaPillOffsetX"
-    )
-    val animatedPillWidth by animateDpAsState(
-        targetValue = targetPillWidthDp,
-        animationSpec = Motion.physicalSpring(reducedMotion),
-        label = "bottomNavAquaPillWidth"
+        label = "bottomNavPillOffsetX"
     )
 
+    val navBarShape = RoundedCornerShape(26.dp)
     val pillShape = RoundedCornerShape(16.dp)
 
-    Surface(
+    Box(
         modifier = Modifier
             .fillMaxWidth()
             .navigationBarsPadding()
-            .padding(start = 20.dp, end = 20.dp, top = 2.dp, bottom = 10.dp),
-        shape = RoundedCornerShape(28.dp),
-        color = DarkCardSurface,
-        border = BorderStroke(1.5.dp, DarkSubtleBorder),
-        shadowElevation = 12.dp
+            .padding(start = 16.dp, end = 16.dp, top = 2.dp, bottom = 8.dp)
     ) {
-        Box(
-            modifier = Modifier
-                .fillMaxWidth()
-                .padding(horizontal = 10.dp, vertical = 8.dp)
+        Editorial3DLayerBox(
+            modifier = Modifier.fillMaxWidth(),
+            shape = navBarShape,
+            depthX = 0.dp,
+            depthY = 3.5.dp,
+            extrusionColor = animatedExtrusionColor,
+            enableInteractiveTilt = false
         ) {
-            // Sliding 3D Aqua (#8FE3F0) selected-tab pill behind the active tab
-            if (hasMeasuredTabs && tabWidthsPx[selectedIndex] > 0) {
+            Surface(
+                modifier = Modifier.fillMaxWidth(),
+                shape = navBarShape,
+                color = animatedBarBg,
+                border = BorderStroke(1.5.dp, animatedBarBorder),
+                shadowElevation = if (isDark) 8.dp else 4.dp
+            ) {
                 Box(
                     modifier = Modifier
-                        .offset(x = animatedPillOffsetX)
-                        .width(animatedPillWidth)
-                        .height(44.dp),
-                    contentAlignment = Alignment.Center
+                        .fillMaxWidth()
+                        .padding(horizontal = 6.dp, vertical = 6.dp)
                 ) {
-                    Editorial3DLayerBox(
-                        modifier = Modifier.fillMaxSize(),
-                        shape = pillShape,
-                        depthX = 2.dp,
-                        depthY = 3.dp,
-                        extrusionColor = Color(0xFF050507),
-                        enableInteractiveTilt = false
-                    ) {
+                    // Sliding 3D floating pill behind the active tab's icon
+                    if (hasMeasuredTabs && tabWidthsPx[selectedIndex] > 0) {
                         Box(
                             modifier = Modifier
-                                .fillMaxSize()
-                                .clip(pillShape)
-                                .background(EditorialAqua)
-                        )
-                    }
-                }
-            }
-
-            Row(
-                modifier = Modifier.fillMaxWidth(),
-                horizontalArrangement = Arrangement.SpaceBetween,
-                verticalAlignment = Alignment.CenterVertically
-            ) {
-                tabs.forEachIndexed { idx, tab ->
-                    val isSelected = currentTab == tab
-                    val tabInteractionSource = remember { MutableInteractionSource() }
-                    val isTabPressed by tabInteractionSource.collectIsPressedAsState()
-                    val tabPressFraction by animateFloatAsState(
-                        targetValue = if (isTabPressed) 1f else 0f,
-                        animationSpec = Motion.pressSpring(reducedMotion),
-                        label = "bottomNavTabPress_${tab.name}"
-                    )
-                    val iconTint by animateColorAsState(
-                        targetValue = if (isSelected) InkBlack else PureWhite,
-                        animationSpec = Motion.quickTween(reducedMotion),
-                        label = "bottomNavIconTint_${tab.name}"
-                    )
-
-                    Box(
-                        modifier = Modifier
-                            .minimumInteractiveComponentSize()
-                            .height(46.dp)
-                            .onGloballyPositioned { coords ->
-                                val posX = coords.positionInParent().x.roundToInt()
-                                val w = coords.size.width
-                                if (tabOffsetsPx[idx] != posX || tabWidthsPx[idx] != w) {
-                                    tabOffsetsPx[idx] = posX
-                                    tabWidthsPx[idx] = w
-                                    if (tabWidthsPx.any { it > 0 }) {
-                                        hasMeasuredTabs = true
-                                    }
-                                }
-                            }
-                            .offset(
-                                x = 2.dp * tabPressFraction,
-                                y = 2.5.dp * tabPressFraction
-                            )
-                            .clickable(
-                                interactionSource = tabInteractionSource,
-                                indication = null,
-                                role = Role.Tab
+                                .offset(x = animatedPillOffsetX)
+                                .width(pillWidthDp)
+                                .height(pillHeightDp),
+                            contentAlignment = Alignment.Center
+                        ) {
+                            Editorial3DLayerBox(
+                                modifier = Modifier.fillMaxSize(),
+                                shape = pillShape,
+                                depthX = 1.dp,
+                                depthY = 2.dp,
+                                extrusionColor = if (isDark) Color(0xFF050508) else InkBlack,
+                                enableInteractiveTilt = false
                             ) {
-                                Motion.performLightTapHaptic(view)
-                                onTabSelected(tab)
+                                Box(
+                                    modifier = Modifier
+                                        .fillMaxSize()
+                                        .clip(pillShape)
+                                        .background(animatedPillBg)
+                                        .border(BorderStroke(1.5.dp, animatedPillBorder), pillShape)
+                                )
                             }
-                            .testTag(tab.testTag),
-                        contentAlignment = Alignment.Center
+                        }
+                    }
+
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.SpaceEvenly,
+                        verticalAlignment = Alignment.CenterVertically
                     ) {
-                        // Fallback Aqua pill on very first frame before onGloballyPositioned fires
-                        if (isSelected && !hasMeasuredTabs) {
+                        tabs.forEachIndexed { idx, tab ->
+                            val isSelected = currentTab == tab
+                            val tabInteractionSource = remember { MutableInteractionSource() }
+                            val isTabPressed by tabInteractionSource.collectIsPressedAsState()
+                            val tabPressFraction by animateFloatAsState(
+                                targetValue = if (isTabPressed) 1f else 0f,
+                                animationSpec = Motion.pressSpring(reducedMotion),
+                                label = "bottomNavTabPress_${tab.name}"
+                            )
+                            val iconScale by animateFloatAsState(
+                                targetValue = if (isSelected) 1.15f else 1.0f,
+                                animationSpec = Motion.physicalSpring(reducedMotion),
+                                label = "bottomNavIconScale_${tab.name}"
+                            )
+
+                            val iconTint by animateColorAsState(
+                                targetValue = if (isDark) {
+                                    peachPuff
+                                } else {
+                                    InkBlack
+                                },
+                                animationSpec = Motion.quickTween(reducedMotion),
+                                label = "bottomNavIconTint_${tab.name}"
+                            )
+
+                            // Alert badges for unselected tabs
+                            val showBadge = when (tab) {
+                                SnapSpendTab.CATEGORIES -> hasBudgetWarning && !isSelected
+                                SnapSpendTab.TRANSACTIONS -> pendingTransactionCount > 0 && !isSelected
+                                else -> false
+                            }
+                            val badgeColor = when (tab) {
+                                SnapSpendTab.CATEGORIES -> EditorialCoral
+                                SnapSpendTab.TRANSACTIONS -> if (isDark) peachPuff else SunnyYellow
+                                else -> EditorialCoral
+                            }
+
                             Box(
                                 modifier = Modifier
-                                    .matchParentSize()
-                                    .clip(pillShape)
-                                    .background(EditorialAqua)
-                            )
-                        }
-
-                        Row(
-                            modifier = Modifier
-                                .height(42.dp)
-                                .padding(horizontal = if (isSelected) 12.dp else 11.dp),
-                            verticalAlignment = Alignment.CenterVertically,
-                            horizontalArrangement = Arrangement.Center
-                        ) {
-                            Icon(
-                                imageVector = tab.icon,
-                                contentDescription = tab.label,
-                                tint = iconTint,
-                                modifier = Modifier.size(if (isSelected) 20.dp else 22.dp)
-                            )
-                            // Selected tab label grows out and shrinks away with a spring animation (never a sudden jump)
-                            AnimatedVisibility(
-                                visible = isSelected,
-                                enter = expandHorizontally(
-                                    animationSpec = Motion.physicalIntSizeSpring(reducedMotion),
-                                    expandFrom = Alignment.Start
-                                ) + fadeIn(animationSpec = Motion.quickTween(reducedMotion)),
-                                exit = shrinkHorizontally(
-                                    animationSpec = Motion.physicalIntSizeSpring(reducedMotion),
-                                    shrinkTowards = Alignment.Start
-                                ) + fadeOut(animationSpec = Motion.quickTween(reducedMotion))
-                            ) {
-                                Row(verticalAlignment = Alignment.CenterVertically) {
-                                    Spacer(modifier = Modifier.width(6.dp))
-                                    Text(
-                                        text = tab.label,
-                                        style = MaterialTheme.typography.labelMedium.copy(
-                                            fontWeight = FontWeight.ExtraBold,
-                                            fontSize = 12.sp
-                                        ),
-                                        color = InkBlack,
-                                        maxLines = 1
+                                    .weight(1f)
+                                    .minimumInteractiveComponentSize()
+                                    .height(48.dp)
+                                    .onGloballyPositioned { coords ->
+                                        val posX = coords.positionInParent().x.roundToInt()
+                                        val w = coords.size.width
+                                        if (tabOffsetsPx[idx] != posX || tabWidthsPx[idx] != w) {
+                                            tabOffsetsPx[idx] = posX
+                                            tabWidthsPx[idx] = w
+                                            if (tabWidthsPx.all { it > 0 }) {
+                                                hasMeasuredTabs = true
+                                            }
+                                        }
+                                    }
+                                    .offset(
+                                        x = 1.dp * tabPressFraction,
+                                        y = 1.5.dp * tabPressFraction
                                     )
+                                    .clickable(
+                                        interactionSource = tabInteractionSource,
+                                        indication = null,
+                                        role = Role.Tab
+                                    ) {
+                                        Motion.performLightTapHaptic(view)
+                                        onTabSelected(tab)
+                                    }
+                                    .testTag(tab.testTag),
+                                contentAlignment = Alignment.Center
+                            ) {
+                                // Fallback pill on very first frame before layout measurement
+                                if (isSelected && !hasMeasuredTabs) {
+                                    Box(
+                                        modifier = Modifier
+                                            .size(pillWidthDp, pillHeightDp)
+                                            .clip(pillShape)
+                                            .background(targetPillBg)
+                                            .border(BorderStroke(1.5.dp, targetPillBorder), pillShape)
+                                    )
+                                }
+
+                                Box(
+                                    contentAlignment = Alignment.TopEnd
+                                ) {
+                                    Icon(
+                                        imageVector = if (isSelected) tab.selectedIcon else tab.unselectedIcon,
+                                        contentDescription = tab.label,
+                                        tint = iconTint,
+                                        modifier = Modifier
+                                            .size(24.dp)
+                                            .scale(iconScale)
+                                    )
+
+                                    if (showBadge) {
+                                        Box(
+                                            modifier = Modifier
+                                                .offset(x = 3.dp, y = (-2).dp)
+                                                .size(7.dp)
+                                                .clip(CircleShape)
+                                                .background(animatedBarBg)
+                                                .padding(1.dp)
+                                                .clip(CircleShape)
+                                                .background(badgeColor)
+                                        )
+                                    }
                                 }
                             }
                         }
