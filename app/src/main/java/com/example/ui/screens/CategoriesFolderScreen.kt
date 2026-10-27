@@ -1583,11 +1583,28 @@ private fun FrontSwipeableCategoryCard(
                                                     maxLines = 1,
                                                     overflow = TextOverflow.Ellipsis
                                                 )
-                                                Text(
-                                                    text = MoneyUtils.formatShortDateTime(tx.timestamp, tx.hasExplicitTime),
-                                                    style = MaterialTheme.typography.labelSmall,
-                                                    color = InkBlack.copy(alpha = 0.72f)
-                                                )
+                                                Row(
+                                                    verticalAlignment = Alignment.CenterVertically,
+                                                    horizontalArrangement = Arrangement.spacedBy(5.dp)
+                                                ) {
+                                                    Text(
+                                                        text = tx.category,
+                                                        style = MaterialTheme.typography.labelSmall.copy(fontWeight = FontWeight.Bold),
+                                                        color = InkBlack.copy(alpha = 0.78f),
+                                                        maxLines = 1,
+                                                        overflow = TextOverflow.Ellipsis
+                                                    )
+                                                    if (tx.paymentMode.equals("CASH", ignoreCase = true)) {
+                                                        com.example.ui.components.CashModeBadge()
+                                                    }
+                                                    Text(
+                                                        text = "· ${MoneyUtils.formatShortDateTime(tx.timestamp, tx.hasExplicitTime)}",
+                                                        style = MaterialTheme.typography.labelSmall,
+                                                        color = InkBlack.copy(alpha = 0.72f),
+                                                        maxLines = 1,
+                                                        overflow = TextOverflow.Ellipsis
+                                                    )
+                                                }
                                             }
                                         }
                                         val signPrefix = if (tx.type == TransactionType.EARNING) "+" else "-"

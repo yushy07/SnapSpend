@@ -66,10 +66,18 @@ enum class DateRangeFilter(val label: String) {
     THIS_YEAR("This year")
 }
 
+enum class PaymentModeFilter(val label: String) {
+    ALL("All"),
+    ONLINE("Online"),
+    CASH("Cash")
+}
+
 data class QueuedScanTask(
     val uris: List<Uri> = emptyList(),
     val samplePreset: Int? = null,
     val naturalLanguageNote: String? = null,
+    val isSmartCashLog: Boolean = false,
+    val defaultCashType: TransactionType? = null,
     val queuedAtMillis: Long = System.currentTimeMillis()
 )
 
@@ -81,13 +89,17 @@ sealed interface ScanUiState {
         val reason: String,
         val lastUris: List<Uri> = emptyList(),
         val lastSamplePreset: Int? = null,
-        val lastNaturalLanguageNote: String? = null
+        val lastNaturalLanguageNote: String? = null,
+        val isSmartCashLog: Boolean = false,
+        val defaultCashType: TransactionType? = null
     ) : ScanUiState
     data class Error(
         val message: String,
         val recoverableUris: List<Uri> = emptyList(),
         val recoverableSamplePreset: Int? = null,
-        val recoverableNaturalLanguageNote: String? = null
+        val recoverableNaturalLanguageNote: String? = null,
+        val isSmartCashLog: Boolean = false,
+        val defaultCashType: TransactionType? = null
     ) : ScanUiState
 }
 
@@ -102,12 +114,14 @@ data class FilterState(
     val dateRange: DateRangeFilter = DateRangeFilter.ALL,
     val selectedCategory: String? = null,
     val selectedType: TransactionType? = null,
-    val selectedPaymentApp: String? = null
+    val selectedPaymentApp: String? = null,
+    val paymentModeFilter: PaymentModeFilter = PaymentModeFilter.ALL
 )
 
 data class ChartControlState(
     val chartDateRange: DateRangeFilter = DateRangeFilter.THIS_MONTH,
-    val lineGranularity: String = "DAILY" // "DAILY", "WEEKLY", "MONTHLY"
+    val lineGranularity: String = "DAILY", // "DAILY", "WEEKLY", "MONTHLY"
+    val paymentModeFilter: PaymentModeFilter = PaymentModeFilter.ALL
 )
 
 enum class UndoActionKind {
@@ -137,6 +151,8 @@ data class SnapSpendUiState(
     val thisMonthSpentPaise: Long = 0L,
     val thisMonthEarnedPaise: Long = 0L,
     val thisMonthLeftPaise: Long = 0L,
+    val cashInHandPaise: Long = 0L,
+    val thisMonthCashSpentPaise: Long = 0L,
     val thisMonthCategorySlices: List<CategorySlice> = emptyList(),
     val last5Transactions: List<TransactionEntity> = emptyList(),
     val quickRepeatChips: List<QuickRepeatChip> = emptyList(),
@@ -145,6 +161,7 @@ data class SnapSpendUiState(
     val availablePaymentApps: List<String> = emptyList(),
     // Charts & Local Insights
     val chartDateRange: DateRangeFilter = DateRangeFilter.THIS_MONTH,
+    val chartPaymentModeFilter: PaymentModeFilter = PaymentModeFilter.ALL,
     val lineGranularity: String = "DAILY",
     val editorialPillBars: List<PillBarEntry> = emptyList(),
     val chartCategorySlices: List<CategorySlice> = emptyList(),
@@ -330,6 +347,8 @@ class SnapSpendViewModel(application: Application) : AndroidViewModel(applicatio
             .sumOf { it.amountPaise }
         val thisMonthLeft = thisMonthEarned - thisMonthSpent
 
+        val cashWalletTotals = LocalInsightsAndRulesEngine.computeCashWalletTotals(allTxs, now)
+
         val thisMonthSlices = LocalInsightsAndRulesEngine.buildCategorySlices(
             transactions = thisMonthTxs,
             categories = categories,
@@ -355,8 +374,13 @@ class SnapSpendViewModel(application: Application) : AndroidViewModel(applicatio
             .distinct()
             .sorted()
 
-        // Charts & Insights calculations (100% local integer paise math)
-        val chartRangeTxs = filterByDateRange(allTxs, chartCtrl.chartDateRange, now)
+        // Charts & Insights calculations (100% local integer paise math, filtered by All | Online | Cash)
+        val chartModeFilteredTxs = when (chartCtrl.paymentModeFilter) {
+            PaymentModeFilter.ALL -> allTxs
+            PaymentModeFilter.ONLINE -> allTxs.filter { it.paymentMode.equals("ONLINE", ignoreCase = true) }
+            PaymentModeFilter.CASH -> allTxs.filter { it.paymentMode.equals("CASH", ignoreCase = true) }
+        }
+        val chartRangeTxs = filterByDateRange(chartModeFilteredTxs, chartCtrl.chartDateRange, now)
         val chartSlices = LocalInsightsAndRulesEngine.buildCategorySlices(
             transactions = chartRangeTxs,
             categories = categories,
@@ -369,20 +393,20 @@ class SnapSpendViewModel(application: Application) : AndroidViewModel(applicatio
                 shortLabel to slice.amountPaise
             }
         } else {
-            val linePts = LocalInsightsAndRulesEngine.buildLineChartPoints(allTxs, chartCtrl.lineGranularity, now)
+            val linePts = LocalInsightsAndRulesEngine.buildLineChartPoints(chartModeFilteredTxs, chartCtrl.lineGranularity, now)
             linePts.map { it.label to it.amountPaise }
         }
         val editorialPillBars = LocalInsightsAndRulesEngine.buildPillBars(pillBuckets)
 
         val linePoints = LocalInsightsAndRulesEngine.buildLineChartPoints(
-            allTransactions = allTxs,
+            allTransactions = chartModeFilteredTxs,
             granularity = chartCtrl.lineGranularity,
             nowMillis = now
         )
-        val comparisons = LocalInsightsAndRulesEngine.buildPeriodComparisons(allTxs, now)
-        val monthlyBars = LocalInsightsAndRulesEngine.buildMonthlyIncomeExpenseBars(allTxs, now)
-        val top5Places = LocalInsightsAndRulesEngine.buildTop5SpendingPlaces(chartRangeTxs.ifEmpty { allTxs })
-        val localInsights = LocalInsightsAndRulesEngine.generateLocalMathInsights(allTxs, now)
+        val comparisons = LocalInsightsAndRulesEngine.buildPeriodComparisons(chartModeFilteredTxs, now)
+        val monthlyBars = LocalInsightsAndRulesEngine.buildMonthlyIncomeExpenseBars(chartModeFilteredTxs, now)
+        val top5Places = LocalInsightsAndRulesEngine.buildTop5SpendingPlaces(chartRangeTxs.ifEmpty { chartModeFilteredTxs })
+        val localInsights = LocalInsightsAndRulesEngine.generateLocalMathInsights(chartModeFilteredTxs, now)
 
         val totalMonthlyBudgetPaise = budgets.sumOf { it.monthlyLimitPaise }
         val monthEndEstimate = MonthEndMath.computeMonthEndEstimate(
@@ -411,6 +435,8 @@ class SnapSpendViewModel(application: Application) : AndroidViewModel(applicatio
             thisMonthSpentPaise = thisMonthSpent,
             thisMonthEarnedPaise = thisMonthEarned,
             thisMonthLeftPaise = thisMonthLeft,
+            cashInHandPaise = cashWalletTotals.cashInHandPaise,
+            thisMonthCashSpentPaise = cashWalletTotals.thisMonthCashSpentPaise,
             thisMonthCategorySlices = thisMonthSlices,
             last5Transactions = allTxs.take(5),
             quickRepeatChips = quickRepeatChips,
@@ -418,6 +444,7 @@ class SnapSpendViewModel(application: Application) : AndroidViewModel(applicatio
             monthEndEstimate = monthEndEstimate,
             availablePaymentApps = paymentApps,
             chartDateRange = chartCtrl.chartDateRange,
+            chartPaymentModeFilter = chartCtrl.paymentModeFilter,
             lineGranularity = chartCtrl.lineGranularity,
             editorialPillBars = editorialPillBars,
             chartCategorySlices = chartSlices,
@@ -513,8 +540,13 @@ class SnapSpendViewModel(application: Application) : AndroidViewModel(applicatio
             val matchesType = filters.selectedType == null || tx.type == filters.selectedType
             val matchesApp = filters.selectedPaymentApp == null ||
                 tx.paymentApp.equals(filters.selectedPaymentApp, ignoreCase = true)
+            val matchesPaymentMode = when (filters.paymentModeFilter) {
+                PaymentModeFilter.ALL -> true
+                PaymentModeFilter.ONLINE -> tx.paymentMode.equals("ONLINE", ignoreCase = true)
+                PaymentModeFilter.CASH -> tx.paymentMode.equals("CASH", ignoreCase = true)
+            }
 
-            matchesSearch && matchesCat && matchesType && matchesApp
+            matchesSearch && matchesCat && matchesType && matchesApp && matchesPaymentMode
         }
     }
 
@@ -539,12 +571,20 @@ class SnapSpendViewModel(application: Application) : AndroidViewModel(applicatio
         _filterState.value = _filterState.value.copy(selectedPaymentApp = app)
     }
 
+    fun updatePaymentModeFilter(mode: PaymentModeFilter) {
+        _filterState.value = _filterState.value.copy(paymentModeFilter = mode)
+    }
+
     fun clearAllFilters() {
-        _filterState.value = FilterState()
+        _filterState.value = FilterState(paymentModeFilter = _filterState.value.paymentModeFilter)
     }
 
     fun updateChartDateRange(range: DateRangeFilter) {
         _chartControl.value = _chartControl.value.copy(chartDateRange = range)
+    }
+
+    fun updateChartPaymentModeFilter(mode: PaymentModeFilter) {
+        _chartControl.value = _chartControl.value.copy(paymentModeFilter = mode)
     }
 
     fun updateLineGranularity(granularity: String) {
@@ -626,6 +666,37 @@ class SnapSpendViewModel(application: Application) : AndroidViewModel(applicatio
         }
     }
 
+    /**
+     * Parses a rough Smart Cash Log note (e.g. "40 momos, 60 auto" or "got 500 cash from friend")
+     * using `gemini-3.8-flash` (plus local Merchant Memory rules), splitting multi-item notes into
+     * separate review drafts pre-tagged with `paymentMode = "CASH"`.
+     */
+    fun processSmartCashLogWithGemini(
+        userNote: String,
+        defaultCashType: TransactionType = TransactionType.EXPENSE
+    ) {
+        val cleaned = userNote.trim()
+        if (cleaned.isEmpty()) return
+        viewModelScope.launch {
+            _scanState.value = ScanUiState.Reading(1, 1, "Sorting your cash note with Gemini AI...")
+            val categories = repository.getAllCategoriesOnce()
+            val result = aiExtractor.extractFromNaturalLanguageText(
+                userInput = cleaned,
+                categories = categories,
+                defaultPaymentMode = "CASH",
+                defaultCashType = defaultCashType
+            )
+            handleExtractionResult(
+                result = result,
+                lastUris = emptyList(),
+                lastSamplePreset = null,
+                lastNote = cleaned,
+                isSmartCashLog = true,
+                defaultCashType = defaultCashType
+            )
+        }
+    }
+
     fun retryLastScan() {
         when (val current = _scanState.value) {
             is ScanUiState.Error -> {
@@ -634,7 +705,14 @@ class SnapSpendViewModel(application: Application) : AndroidViewModel(applicatio
                 } else if (current.recoverableSamplePreset != null) {
                     scanSampleUpiScreenshotWithGemini(current.recoverableSamplePreset)
                 } else if (!current.recoverableNaturalLanguageNote.isNullOrBlank()) {
-                    processNaturalLanguageNoteWithGemini(current.recoverableNaturalLanguageNote)
+                    if (current.isSmartCashLog) {
+                        processSmartCashLogWithGemini(
+                            current.recoverableNaturalLanguageNote,
+                            current.defaultCashType ?: TransactionType.EXPENSE
+                        )
+                    } else {
+                        processNaturalLanguageNoteWithGemini(current.recoverableNaturalLanguageNote)
+                    }
                 }
             }
             is ScanUiState.Unreadable -> {
@@ -643,7 +721,14 @@ class SnapSpendViewModel(application: Application) : AndroidViewModel(applicatio
                 } else if (current.lastSamplePreset != null) {
                     scanSampleUpiScreenshotWithGemini(current.lastSamplePreset)
                 } else if (!current.lastNaturalLanguageNote.isNullOrBlank()) {
-                    processNaturalLanguageNoteWithGemini(current.lastNaturalLanguageNote)
+                    if (current.isSmartCashLog) {
+                        processSmartCashLogWithGemini(
+                            current.lastNaturalLanguageNote,
+                            current.defaultCashType ?: TransactionType.EXPENSE
+                        )
+                    } else {
+                        processNaturalLanguageNoteWithGemini(current.lastNaturalLanguageNote)
+                    }
                 }
             }
             else -> Unit
@@ -655,7 +740,9 @@ class SnapSpendViewModel(application: Application) : AndroidViewModel(applicatio
         val task = QueuedScanTask(
             uris = current.recoverableUris,
             samplePreset = current.recoverableSamplePreset,
-            naturalLanguageNote = current.recoverableNaturalLanguageNote
+            naturalLanguageNote = current.recoverableNaturalLanguageNote,
+            isSmartCashLog = current.isSmartCashLog,
+            defaultCashType = current.defaultCashType
         )
         _queuedScans.value = _queuedScans.value + task
         _scanState.value = ScanUiState.Idle
@@ -668,7 +755,16 @@ class SnapSpendViewModel(application: Application) : AndroidViewModel(applicatio
         when {
             pending.uris.isNotEmpty() -> processSelectedUris(pending.uris)
             pending.samplePreset != null -> scanSampleUpiScreenshotWithGemini(pending.samplePreset)
-            !pending.naturalLanguageNote.isNullOrBlank() -> processNaturalLanguageNoteWithGemini(pending.naturalLanguageNote)
+            !pending.naturalLanguageNote.isNullOrBlank() -> {
+                if (pending.isSmartCashLog) {
+                    processSmartCashLogWithGemini(
+                        pending.naturalLanguageNote,
+                        pending.defaultCashType ?: TransactionType.EXPENSE
+                    )
+                } else {
+                    processNaturalLanguageNoteWithGemini(pending.naturalLanguageNote)
+                }
+            }
         }
     }
 
@@ -676,7 +772,9 @@ class SnapSpendViewModel(application: Application) : AndroidViewModel(applicatio
         result: ExtractionResult,
         lastUris: List<Uri>,
         lastSamplePreset: Int?,
-        lastNote: String? = null
+        lastNote: String? = null,
+        isSmartCashLog: Boolean = false,
+        defaultCashType: TransactionType? = null
     ) {
         when (result) {
             is ExtractionResult.Success -> {
@@ -701,7 +799,9 @@ class SnapSpendViewModel(application: Application) : AndroidViewModel(applicatio
                     reason = result.reason,
                     lastUris = lastUris,
                     lastSamplePreset = lastSamplePreset,
-                    lastNaturalLanguageNote = lastNote
+                    lastNaturalLanguageNote = lastNote,
+                    isSmartCashLog = isSmartCashLog,
+                    defaultCashType = defaultCashType
                 )
             }
             is ExtractionResult.Error -> {
@@ -709,7 +809,9 @@ class SnapSpendViewModel(application: Application) : AndroidViewModel(applicatio
                     message = result.message,
                     recoverableUris = lastUris,
                     recoverableSamplePreset = lastSamplePreset,
-                    recoverableNaturalLanguageNote = lastNote
+                    recoverableNaturalLanguageNote = lastNote,
+                    isSmartCashLog = isSmartCashLog,
+                    defaultCashType = defaultCashType
                 )
             }
         }
@@ -838,6 +940,7 @@ class SnapSpendViewModel(application: Application) : AndroidViewModel(applicatio
         }
         viewModelScope.launch {
             val nowMillis = System.currentTimeMillis()
+            val normalizedMode = if (chip.paymentMode.equals("CASH", ignoreCase = true)) "CASH" else "ONLINE"
             val newTx = TransactionEntity(
                 id = 0L,
                 timestamp = nowMillis,
@@ -850,7 +953,8 @@ class SnapSpendViewModel(application: Application) : AndroidViewModel(applicatio
                 status = com.example.data.local.TransactionStatus.SUCCESS,
                 note = "",
                 createdAt = nowMillis,
-                source = TransactionSource.MANUAL
+                source = TransactionSource.MANUAL,
+                paymentMode = normalizedMode
             )
             val insertedId = repository.saveTransaction(newTx, learnMerchantCategory = false)
             _undoBannerState.value = UndoBannerState(
@@ -1182,6 +1286,8 @@ suspend fun loadDataCheckSnapshotFromSql(
     val failedCount = dao.getDataCheckFailedCount()
     val transferCount = dao.getDataCheckTransferCount()
     val trashedCount = dao.getDataCheckTrashedCount()
+    val onlineActiveCount = dao.getDataCheckOnlineActiveCount()
+    val cashActiveCount = dao.getDataCheckCashActiveCount()
 
     val (thisMonthStart, thisMonthEnd) = computeDataCheckMonthBounds(nowMillis, 0)
     val thisMonthSpentSql = dao.getDataCheckMonthMoneyOutPaise(thisMonthStart, thisMonthEnd)
@@ -1212,6 +1318,8 @@ suspend fun loadDataCheckSnapshotFromSql(
         failedCount = failedCount,
         transferCount = transferCount,
         trashedCount = trashedCount,
+        onlineActiveCount = onlineActiveCount,
+        cashActiveCount = cashActiveCount,
         thisMonthSpentSqlPaise = thisMonthSpentSql,
         monthlyRows = monthlyRows,
         last10SavedRows = last10Rows

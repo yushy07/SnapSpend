@@ -63,7 +63,7 @@ data class SnapSpendColors(
 
 val LightSnapSpendColors = SnapSpendColors(
     isDark = false,
-    appBackground = EditorialBg,                 // #F2F3EF warm light background
+    appBackground = EditorialBg,                 // #F9E4D4 Warm Peach Cream light background
     slateOrNeutralCard = PureWhite,              // #FFFFFF cards in light mode
     dividerColor = Color(0xFFE0E2DC),
     primaryText = InkBlack,                      // #0B0B0B
@@ -91,11 +91,11 @@ val LightSnapSpendColors = SnapSpendColors(
 
 val DarkSnapSpendColors = SnapSpendColors(
     isDark = true,
-    appBackground = TrueBlackBg,                 // #0A0A0A true black background
-    slateOrNeutralCard = DarkCardSurface,        // #1C1C1E dark cards
-    dividerColor = DarkSubtleBorder,             // #2C2C2E
-    primaryText = PureWhite,                     // #FFFFFF on black/dark cards
-    secondaryText = SecondaryGreyText,           // #A0A0A8 secondary grey text
+    appBackground = TrueBlackBg,                 // #181A1F Deep Charcoal-Slate dark background
+    slateOrNeutralCard = DarkCardSurface,        // #23262E elevated dark surface cards
+    dividerColor = DarkSubtleBorder,             // #383C4A legible dark outline/divider
+    primaryText = PureWhite,                     // #FFFFFF on dark surfaces
+    secondaryText = SecondaryGreyText,           // #B0B4C0 secondary grey text
     sectionTitleColor = PureWhite,               // #FFFFFF
     heroBalanceCard = SunnyYellow,               // #FFD23F
     spentCard = EditorialCoral,                  // #FF6F59
@@ -103,18 +103,18 @@ val DarkSnapSpendColors = SnapSpendColors(
     topCategoryCard = PeriwinkleIndigo,          // #5B5CF6
     budgetOrChartCard = EditorialAqua,           // #8FE3F0
     brightPalette = listOf(SunnyYellow, EditorialCoral, EditorialAqua, EditorialMint, PeriwinkleIndigo),
-    wideSecondaryButtonBg = DarkCardSurface,     // #1C1C1E
+    wideSecondaryButtonBg = DarkCardSurface,     // #23262E
     wideSecondaryButtonContent = PureWhite,      // #FFFFFF
-    segmentedTrackBg = DarkCardSurface,          // #1C1C1E
+    segmentedTrackBg = DarkCardSurface,          // #23262E
     segmentedSelectedPillBg = EditorialAqua,     // #8FE3F0
     segmentedSelectedText = InkBlack,            // #0B0B0B on Aqua pill
-    segmentedUnselectedText = SecondaryGreyText, // #A0A0A8
+    segmentedUnselectedText = SecondaryGreyText, // #B0B4C0
     fabBg = SunnyYellow,                         // #FFD23F
     fabIconColor = InkBlack,                     // #0B0B0B
     incomeAmountColor = EditorialMint,           // #9FE3C0
     expenseAmountColor = PureWhite,              // #FFFFFF
-    cardBorder = DarkSubtleBorder,               // #2C2C2E
-    chartSliceGapColor = TrueBlackBg             // #0A0A0A
+    cardBorder = DarkSubtleBorder,               // #383C4A
+    chartSliceGapColor = TrueBlackBg             // #181A1F
 )
 
 val LocalSnapSpendColors = staticCompositionLocalOf { DarkSnapSpendColors }

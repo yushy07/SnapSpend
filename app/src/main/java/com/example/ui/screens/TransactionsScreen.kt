@@ -46,10 +46,12 @@ import com.example.data.local.TransactionEntity
 import com.example.data.local.TransactionStatus
 import com.example.data.local.TransactionType
 import com.example.ui.DateRangeFilter
+import com.example.ui.PaymentModeFilter
 import com.example.ui.SnapSpendUiState
 import com.example.ui.components.DarkLiveInsightCard
 import com.example.ui.components.Editorial3DLayerBox
 import com.example.ui.components.PaleMintIllustratedHeroCard
+import com.example.ui.components.SegmentedPillToggle
 import com.example.ui.components.SeparatedPastelTransactionList
 import com.example.ui.components.TinySectionLabel
 import com.example.ui.components.TransactionsFilterBottomSheet
@@ -60,6 +62,7 @@ import com.example.ui.theme.BrightCardBlack
 import com.example.ui.theme.CondensedCardTitleStyle
 import com.example.ui.theme.EditorialCoral
 import com.example.ui.theme.EditorialLavender
+import com.example.ui.theme.EditorialMint
 import com.example.ui.theme.InkBlack
 import com.example.ui.theme.LocalReducedMotion
 import com.example.ui.theme.MarkScreenEntrancePlayedEffect
@@ -70,6 +73,14 @@ import com.example.ui.theme.SnapSpendThemeTokens
 import com.example.ui.theme.SunnyYellow
 import com.example.ui.theme.staggeredScreenEntrance
 import com.example.util.MoneyUtils
+import androidx.compose.material.icons.filled.Add
+import androidx.compose.material.icons.filled.AccountBalanceWallet
+import androidx.compose.material3.minimumInteractiveComponentSize
+import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.background
+import androidx.compose.foundation.border
 
 @Composable
 fun TransactionsScreen(
@@ -81,6 +92,8 @@ fun TransactionsScreen(
     onPaymentAppFilterChange: (String?) -> Unit,
     onClearFilters: () -> Unit,
     onTransactionClick: (TransactionEntity) -> Unit,
+    onPaymentModeFilterChange: (PaymentModeFilter) -> Unit = {},
+    onTopUpCashWalletClick: () -> Unit = {},
     topContentPadding: Dp = 8.dp,
     bottomContentPadding: Dp = 120.dp,
     modifier: Modifier = Modifier
@@ -103,7 +116,7 @@ fun TransactionsScreen(
     }
 
     val activeFilterCount = activeFilterLabels.size
-    val hasActiveFilter = filters.searchQuery.isNotBlank() || activeFilterCount > 0
+    val hasActiveFilter = filters.searchQuery.isNotBlank() || activeFilterCount > 0 || filters.paymentModeFilter != PaymentModeFilter.ALL
 
     val matchingTotalPaise = uiState.filteredTransactions
         .filter { it.status == TransactionStatus.SUCCESS }
@@ -173,8 +186,26 @@ fun TransactionsScreen(
                     }
                 )
 
-                // Show the robot illustration ONLY when the list is empty
-                if (uiState.groupedTransactions.isEmpty()) {
+                // 3-Way Segmented Filter Pill: All | Online | Cash
+                SegmentedPillToggle(
+                    options = PaymentModeFilter.entries,
+                    selectedOption = filters.paymentModeFilter,
+                    labelProvider = { it.label },
+                    onOptionSelected = onPaymentModeFilterChange,
+                    optionTestTagProvider = { "tx_payment_mode_${it.name.lowercase()}" }
+                )
+
+                // Dedicated Cash Ledger Summary Card when "Cash" is selected
+                if (filters.paymentModeFilter == PaymentModeFilter.CASH) {
+                    CashLedgerSummaryCard(
+                        thisMonthCashSpentPaise = uiState.thisMonthCashSpentPaise,
+                        cashInHandPaise = uiState.cashInHandPaise,
+                        onTopUpClick = onTopUpCashWalletClick
+                    )
+                }
+
+                // Show the robot illustration ONLY when the list is empty and not in Cash Ledger mode
+                if (uiState.groupedTransactions.isEmpty() && filters.paymentModeFilter != PaymentModeFilter.CASH) {
                     PaleMintIllustratedHeroCard(
                         modifier = Modifier.testTag("reports_pale_mint_hero")
                     )
@@ -391,5 +422,173 @@ fun TransactionsScreen(
                 showFilterSheet = false
             }
         )
+    }
+}
+
+/**
+ * Sunny Yellow (#FFD23F) 3D Cash Wallet & Ledger Summary Card shown when the `Cash` filter pill is active:
+ * - Shows "CASH SPENT THIS MONTH: ₹X" and "CASH IN HAND: ₹Y"
+ * - Includes a "+ Top Up / ATM Withdrawal" quick button that opens the Add Payment editor pre-set to Transfer + Cash.
+ */
+@Composable
+private fun CashLedgerSummaryCard(
+    thisMonthCashSpentPaise: Long,
+    cashInHandPaise: Long,
+    onTopUpClick: () -> Unit,
+    modifier: Modifier = Modifier
+) {
+    val cardShape = RoundedCornerShape(28.dp)
+    Editorial3DLayerBox(
+        modifier = modifier
+            .fillMaxWidth()
+            .testTag("cash_ledger_summary_card"),
+        shape = cardShape,
+        extrusionColor = InkBlack,
+        extrusionBorderColor = InkBlack,
+        depthX = 4.dp,
+        depthY = 6.dp
+    ) {
+        Surface(
+            modifier = Modifier.fillMaxWidth(),
+            shape = cardShape,
+            color = SunnyYellow,
+            contentColor = InkBlack,
+            border = BorderStroke(2.dp, InkBlack)
+        ) {
+            Column(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(18.dp),
+                verticalArrangement = Arrangement.spacedBy(12.dp)
+            ) {
+                Row(
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.spacedBy(10.dp)
+                ) {
+                    Box(
+                        modifier = Modifier
+                            .size(36.dp)
+                            .clip(CircleShape)
+                            .background(PureWhite)
+                            .border(1.5.dp, InkBlack, CircleShape),
+                        contentAlignment = Alignment.Center
+                    ) {
+                        Icon(
+                            imageVector = Icons.Default.AccountBalanceWallet,
+                            contentDescription = "Cash Wallet",
+                            tint = InkBlack,
+                            modifier = Modifier.size(19.dp)
+                        )
+                    }
+                    Column {
+                        Text(
+                            text = "CASH WALLET & LEDGER",
+                            style = CondensedCardTitleStyle.copy(fontSize = 22.sp),
+                            color = InkBlack
+                        )
+                        Text(
+                            text = "ATM withdrawals & cash top-ups add to Cash in Hand without double-counting as expenses",
+                            style = MaterialTheme.typography.labelSmall.copy(fontWeight = FontWeight.Bold),
+                            color = InkBlack.copy(alpha = 0.78f)
+                        )
+                    }
+                }
+
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.spacedBy(10.dp)
+                ) {
+                    Surface(
+                        modifier = Modifier
+                            .weight(1f)
+                            .testTag("cash_spent_this_month_box"),
+                        shape = RoundedCornerShape(18.dp),
+                        color = PureWhite,
+                        border = BorderStroke(1.6.dp, InkBlack)
+                    ) {
+                        Column(modifier = Modifier.padding(12.dp)) {
+                            Text(
+                                text = "CASH SPENT THIS MONTH: ${MoneyUtils.formatPaise(thisMonthCashSpentPaise)}",
+                                style = MaterialTheme.typography.labelSmall.copy(fontWeight = FontWeight.ExtraBold),
+                                color = InkBlack.copy(alpha = 0.76f)
+                            )
+                            Spacer(modifier = Modifier.height(4.dp))
+                            Text(
+                                text = MoneyUtils.formatPaise(thisMonthCashSpentPaise),
+                                style = CondensedCardTitleStyle.copy(fontSize = 24.sp),
+                                color = InkBlack
+                            )
+                        }
+                    }
+
+                    Surface(
+                        modifier = Modifier
+                            .weight(1f)
+                            .testTag("cash_in_hand_box"),
+                        shape = RoundedCornerShape(18.dp),
+                        color = PureWhite,
+                        border = BorderStroke(1.6.dp, InkBlack)
+                    ) {
+                        Column(modifier = Modifier.padding(12.dp)) {
+                            Text(
+                                text = "CASH IN HAND: ${MoneyUtils.formatPaise(cashInHandPaise, showPlusForPositive = false)}",
+                                style = MaterialTheme.typography.labelSmall.copy(fontWeight = FontWeight.ExtraBold),
+                                color = InkBlack.copy(alpha = 0.76f)
+                            )
+                            Spacer(modifier = Modifier.height(4.dp))
+                            Text(
+                                text = if (cashInHandPaise < 0L) {
+                                    "-${MoneyUtils.formatPaise(kotlin.math.abs(cashInHandPaise))}"
+                                } else {
+                                    MoneyUtils.formatPaise(cashInHandPaise)
+                                },
+                                style = CondensedCardTitleStyle.copy(fontSize = 24.sp),
+                                color = if (cashInHandPaise < 0L) EditorialCoral else InkBlack
+                            )
+                        }
+                    }
+                }
+
+                Editorial3DLayerBox(
+                    modifier = Modifier.fillMaxWidth(),
+                    shape = CircleShape,
+                    extrusionColor = InkBlack,
+                    extrusionBorderColor = InkBlack,
+                    depthX = 3.dp,
+                    depthY = 4.dp
+                ) {
+                    Surface(
+                        onClick = onTopUpClick,
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .minimumInteractiveComponentSize()
+                            .testTag("cash_wallet_top_up_button"),
+                        shape = CircleShape,
+                        color = EditorialMint,
+                        contentColor = InkBlack,
+                        border = BorderStroke(1.8.dp, InkBlack)
+                    ) {
+                        Row(
+                            modifier = Modifier.padding(horizontal = 16.dp, vertical = 12.dp),
+                            horizontalArrangement = Arrangement.Center,
+                            verticalAlignment = Alignment.CenterVertically
+                        ) {
+                            Icon(
+                                imageVector = Icons.Default.Add,
+                                contentDescription = null,
+                                tint = InkBlack,
+                                modifier = Modifier.size(18.dp)
+                            )
+                            Spacer(modifier = Modifier.width(6.dp))
+                            Text(
+                                text = "+ TOP UP / ATM WITHDRAWAL",
+                                style = CondensedCardTitleStyle.copy(fontSize = 18.sp),
+                                color = InkBlack
+                            )
+                        }
+                    }
+                }
+            }
+        }
     }
 }

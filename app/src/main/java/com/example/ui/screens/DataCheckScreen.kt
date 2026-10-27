@@ -94,6 +94,8 @@ data class DataCheckSnapshot(
     val failedCount: Int = 0,
     val transferCount: Int = 0,
     val trashedCount: Int = 0,
+    val onlineActiveCount: Int = 0,
+    val cashActiveCount: Int = 0,
     val thisMonthSpentSqlPaise: Long = 0L,
     val monthlyRows: List<DataCheckMonthRow> = emptyList(),
     val last10SavedRows: List<TransactionEntity> = emptyList()
@@ -115,6 +117,8 @@ data class DataCheckSnapshot(
             appendLine("Failed: $failedCount")
             appendLine("Transfer: $transferCount")
             appendLine("Trashed: $trashedCount")
+            appendLine("Online (active): $onlineActiveCount")
+            appendLine("Cash (active): $cashActiveCount")
             appendLine()
             appendLine("2. COMPARE WITH HOME (THIS MONTH SPENT)")
             appendLine("Data Check (SQL): ${MoneyUtils.formatExactPaise(thisMonthSpentSqlPaise)} ($thisMonthSpentSqlPaise paise)")
@@ -145,7 +149,7 @@ data class DataCheckSnapshot(
                 last10SavedRows.forEach { tx ->
                     val formattedDate = dateTimeFormat.format(Date(tx.timestamp))
                     appendLine(
-                        "id=${tx.id} | date=$formattedDate (${tx.timestamp}) | amountPaise=${tx.amountPaise} | type=${tx.type.name} | status=${tx.status.name} | merchant=${tx.merchant} | category=${tx.category} | source=${tx.source.name} | referenceNumber=${tx.referenceNumber ?: "null"} | duplicateKey=${tx.duplicateKey}"
+                        "id=${tx.id} | date=$formattedDate (${tx.timestamp}) | amountPaise=${tx.amountPaise} | type=${tx.type.name} | status=${tx.status.name} | paymentMode=${tx.paymentMode} | merchant=${tx.merchant} | category=${tx.category} | source=${tx.source.name} | referenceNumber=${tx.referenceNumber ?: "null"} | duplicateKey=${tx.duplicateKey}"
                     )
                 }
             }
@@ -525,6 +529,26 @@ fun DataCheckScreen(
                                 modifier = Modifier.weight(1f)
                             )
                         }
+
+                        Row(
+                            modifier = Modifier.fillMaxWidth(),
+                            horizontalArrangement = Arrangement.spacedBy(10.dp)
+                        ) {
+                            CountStatTile(
+                                label = "Online (Active)",
+                                value = snapshot.onlineActiveCount.toString(),
+                                bgColor = PureWhite,
+                                testTag = "count_online_active",
+                                modifier = Modifier.weight(1f)
+                            )
+                            CountStatTile(
+                                label = "Cash (Active)",
+                                value = snapshot.cashActiveCount.toString(),
+                                bgColor = SunnyYellow,
+                                testTag = "count_cash_active",
+                                modifier = Modifier.weight(1f)
+                            )
+                        }
                     }
                 }
             }
@@ -793,6 +817,7 @@ private fun RawStoredTransactionCard(
                 RawKeyValueLine(key = "amountPaise", value = "${tx.amountPaise}")
                 RawKeyValueLine(key = "type", value = tx.type.name)
                 RawKeyValueLine(key = "status", value = tx.status.name)
+                RawKeyValueLine(key = "paymentMode", value = tx.paymentMode)
                 RawKeyValueLine(key = "merchant", value = tx.merchant)
                 RawKeyValueLine(key = "category", value = tx.category)
                 RawKeyValueLine(key = "source", value = tx.source.name)

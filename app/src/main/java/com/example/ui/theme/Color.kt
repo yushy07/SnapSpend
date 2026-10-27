@@ -5,14 +5,14 @@ import androidx.compose.ui.graphics.lerp
 import java.util.Locale
 
 // ============================================================================
-// 1. Core Surfaces (True Black Dark Mode & Crisp Light Mode)
+// 1. Core Surfaces (Deep Charcoal-Slate Dark Mode & Warm Peach Cream Light Mode)
 // ============================================================================
-val TrueBlackBg = Color(0xFF12121A)           // Dark screens: deep ink background (#12121A)
-val DarkCardSurface = Color(0xFF1D1D28)       // Dialogs & bottom sheet surface in dark mode (#1D1D28)
-val DarkSubtleBorder = Color(0xFF2E2E40)      // Subtle border for dark dialogs/sheets (#2E2E40)
-val SecondaryGreyText = Color(0xFFA0A0A8)     // Secondary text in dark dialogs/section labels (#A0A0A8)
+val TrueBlackBg = Color(0xFF181A1F)           // Dark mode Deep Charcoal-Slate background (#181A1F)
+val DarkCardSurface = Color(0xFF23262E)       // Elevated dark surface cards, dialogs & sheets (#23262E)
+val DarkSubtleBorder = Color(0xFF383C4A)      // Distinct border/outline for dark surfaces (#383C4A)
+val SecondaryGreyText = Color(0xFFB0B4C0)     // High-contrast secondary text on dark surfaces (#B0B4C0)
 
-val EditorialBg = Color(0xFFF3EEE3)           // Light mode warm cream background (#F3EEE3)
+val EditorialBg = Color(0xFFF9E4D4)           // Light mode Warm Peach Cream background (#F9E4D4)
 val InkBlack = Color(0xFF0B0B0B)              // Pure black (#0B0B0B) for text, icons & borders on ALL colored cards
 val BrightCardBlack = InkBlack
 val InkMuted = Color(0xFF4A4A52)              // Secondary dark grey for subtitles

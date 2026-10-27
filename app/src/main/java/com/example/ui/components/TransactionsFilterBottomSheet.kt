@@ -93,7 +93,7 @@ fun TransactionsFilterBottomSheet(
 
     ModalBottomSheet(
         onDismissRequest = onDismiss,
-        containerColor = if (isDark) tokens.background else PureWhite,
+        containerColor = if (isDark) tokens.cardSurface else PureWhite,
         contentColor = tokens.primaryText,
         shape = RoundedCornerShape(topStart = 32.dp, topEnd = 32.dp),
         modifier = Modifier.testTag("transactions_filter_bottom_sheet")

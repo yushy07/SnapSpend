@@ -29,7 +29,8 @@ data class QuickRepeatChip(
     val amountPaise: Long,
     val paymentApp: String,
     val countInLast90Days: Int,
-    val lastTimestamp: Long
+    val lastTimestamp: Long,
+    val paymentMode: String = "ONLINE"
 ) {
     val label: String
         get() = "$merchant ${MoneyUtils.formatPaise(amountPaise)}"
@@ -145,7 +146,7 @@ object MonthEndMath {
 
         return eligible
             .groupBy { tx ->
-                "${MoneyUtils.normalizeMerchant(tx.merchant)}|${tx.amountPaise}"
+                "${MoneyUtils.normalizeMerchant(tx.merchant)}|${tx.amountPaise}|${tx.paymentMode.uppercase()}"
             }
             .values
             .filter { group -> group.size >= 3 }
@@ -154,7 +155,8 @@ object MonthEndMath {
                     compareByDescending<TransactionEntity> { it.timestamp }.thenByDescending { it.id }
                 )
                 val latest = sortedByRecent.first()
-                val normKey = "${MoneyUtils.normalizeMerchant(latest.merchant)}|${latest.amountPaise}"
+                val modeNormalized = if (latest.paymentMode.equals("CASH", ignoreCase = true)) "CASH" else "ONLINE"
+                val normKey = "${MoneyUtils.normalizeMerchant(latest.merchant)}|${latest.amountPaise}|$modeNormalized"
                 QuickRepeatChip(
                     key = normKey,
                     merchant = latest.merchant,
@@ -162,7 +164,8 @@ object MonthEndMath {
                     amountPaise = latest.amountPaise,
                     paymentApp = latest.paymentApp,
                     countInLast90Days = group.size,
-                    lastTimestamp = latest.timestamp
+                    lastTimestamp = latest.timestamp,
+                    paymentMode = modeNormalized
                 )
             }
             .sortedWith(

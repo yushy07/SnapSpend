@@ -54,7 +54,8 @@ data class DraftTransaction(
     val rawMerchantText: String = "",
     val lineItems: List<ReceiptLineItem> = emptyList(),
     val originalAmountPaise: Long = amountPaise,
-    val splitWays: Int = 1 // 1 = full bill, >1 = equal split (÷N), 0 = itemized pick
+    val splitWays: Int = 1, // 1 = full bill, >1 = equal split (÷N), 0 = itemized pick
+    val paymentMode: String = "ONLINE"
 ) {
     val isLowConfidence: Boolean
         get() = confidence < 0.75f || merchant.equals("unknown", ignoreCase = true) || amountPaise <= 0L
@@ -201,6 +202,14 @@ data class BudgetStatusItem(
     val isExceeded100: Boolean
 )
 
+data class CashWalletTotals(
+    val cashInHandPaise: Long,
+    val thisMonthCashSpentPaise: Long,
+    val cashTransfersInPaise: Long,
+    val cashEarningsInPaise: Long,
+    val cashExpensesOutPaise: Long
+)
+
 /**
  * 100% On-Device Local Math & Smart Rules Engine.
  * Stored transaction data NEVER leaves the device for AI insights.
@@ -219,6 +228,28 @@ object LocalInsightsAndRulesEngine {
      *    sets ResolutionMode.UPDATE_PENDING_TO_FINAL (updates existing row in place, not skipped!).
      * 6. If an existing match was already final, sets ResolutionMode.SKIP_DUPLICATE (skipped by default).
      */
+    private val ATM_TOKEN_REGEX = Regex("""\bATW\b""", RegexOption.IGNORE_CASE)
+
+    /**
+     * Detects ATM cash withdrawal descriptions from bank statements, SMS alerts, or receipts
+     * ("ATM WDL", "CASH WITHDRAWAL", "ATW", etc.) so they are classified as TRANSFER + CASH
+     * (topping up the Cash Wallet without double-counting as an expense).
+     */
+    fun isAtmCashWithdrawalText(text: String): Boolean {
+        if (text.isBlank()) return false
+        val upper = text.uppercase(Locale.US)
+        return upper.contains("ATM WDL") ||
+            upper.contains("ATM-WDL") ||
+            upper.contains("ATM_WDL") ||
+            upper.contains("CASH WITHDRAWAL") ||
+            upper.contains("ATM CASH") ||
+            upper.contains("CASH WDL") ||
+            upper.contains("SELF WITHDRAWAL") ||
+            upper.contains("ATW/") ||
+            upper.contains("ATW-") ||
+            ATM_TOKEN_REGEX.containsMatchIn(upper)
+    }
+
     fun enrichAndResolveDraft(
         rawDraft: DraftTransaction,
         existingTransactions: List<TransactionEntity>,
@@ -229,17 +260,32 @@ object LocalInsightsAndRulesEngine {
         val normMerchant = MoneyUtils.normalizeMerchant(cleanedMerchant)
         val learnedMemory = merchantMemoryMap[normMerchant]
 
+        val isAtmWithdrawal = isAtmCashWithdrawalText(rawDraft.merchant) ||
+            isAtmCashWithdrawalText(rawDraft.rawMerchantText) ||
+            isAtmCashWithdrawalText(rawDraft.note) ||
+            isAtmCashWithdrawalText(cleanedMerchant)
+
         // Rule: Refunds count as earnings ("Refunds & Cashback"), not negative expenses
-        val isRefund = rawDraft.category.equals("Refunds & Cashback", ignoreCase = true) ||
-            rawDraft.note.contains("refund", ignoreCase = true)
+        val isRefund = !isAtmWithdrawal && (
+            rawDraft.category.equals("Refunds & Cashback", ignoreCase = true) ||
+                rawDraft.note.contains("refund", ignoreCase = true)
+            )
         val resolvedType = when {
+            isAtmWithdrawal -> TransactionType.TRANSFER
             isRefund -> TransactionType.EARNING
             else -> rawDraft.type
         }
         val resolvedCategory = when {
+            isAtmWithdrawal -> "Transfers"
             learnedMemory != null && resolvedType != TransactionType.TRANSFER -> learnedMemory.categoryName
             isRefund -> "Refunds & Cashback"
             else -> rawDraft.category
+        }
+        val resolvedPaymentMode = when {
+            isAtmWithdrawal -> "CASH"
+            rawDraft.paymentMode.equals("CASH", ignoreCase = true) -> "CASH"
+            rawDraft.paymentApp.equals("Cash", ignoreCase = true) -> "CASH"
+            else -> "ONLINE"
         }
 
         val normRef = MoneyUtils.normalizeReference(rawDraft.referenceNumber)
@@ -285,11 +331,52 @@ object LocalInsightsAndRulesEngine {
             rawMerchantText = preservedRawMerchant,
             type = resolvedType,
             category = resolvedCategory,
+            paymentMode = resolvedPaymentMode,
             existingMatchId = matchedExisting?.id,
             existingMatchStatus = matchedExisting?.status,
             resolutionMode = resolutionMode,
             isSkipped = shouldSkipByDefault,
             appliedMerchantMemory = learnedMemory != null
+        )
+    }
+
+    /**
+     * Computes Cash Wallet ("Cash in Hand") balance and this month's Cash Spent in whole paise:
+     * cashInHandPaise = (non-trashed SUCCESS where type == TRANSFER && paymentMode == "CASH")
+     *                 + (non-trashed SUCCESS where type == EARNING && paymentMode == "CASH")
+     *                 - (non-trashed SUCCESS where type == EXPENSE && paymentMode == "CASH")
+     */
+    fun computeCashWalletTotals(
+        allTransactions: List<TransactionEntity>,
+        nowMillis: Long = System.currentTimeMillis()
+    ): CashWalletTotals {
+        val activeSuccessCash = allTransactions.filter { tx ->
+            tx.deletedAtMillis == null &&
+                tx.status == TransactionStatus.SUCCESS &&
+                tx.paymentMode.equals("CASH", ignoreCase = true)
+        }
+        val cashTransfersInPaise = activeSuccessCash
+            .filter { it.type == TransactionType.TRANSFER }
+            .sumOf { it.amountPaise }
+        val cashEarningsInPaise = activeSuccessCash
+            .filter { it.type == TransactionType.EARNING }
+            .sumOf { it.amountPaise }
+        val cashExpensesOutPaise = activeSuccessCash
+            .filter { it.type == TransactionType.EXPENSE }
+            .sumOf { it.amountPaise }
+        val cashInHandPaise = cashTransfersInPaise + cashEarningsInPaise - cashExpensesOutPaise
+
+        val (monthStart, monthEnd) = getMonthBounds(nowMillis, 0)
+        val thisMonthCashSpentPaise = activeSuccessCash
+            .filter { it.type == TransactionType.EXPENSE && it.timestamp in monthStart..monthEnd }
+            .sumOf { it.amountPaise }
+
+        return CashWalletTotals(
+            cashInHandPaise = cashInHandPaise,
+            thisMonthCashSpentPaise = thisMonthCashSpentPaise,
+            cashTransfersInPaise = cashTransfersInPaise,
+            cashEarningsInPaise = cashEarningsInPaise,
+            cashExpensesOutPaise = cashExpensesOutPaise
         )
     }
 

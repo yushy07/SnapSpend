@@ -156,6 +156,10 @@ class GeminiReceiptExtractor(private val context: Context) {
                 "suggestedSplitWays" to Schema.integer(
                     description = "If the user or receipt explicitly mentions splitting equally among N people (e.g. 'split 2 ways' -> 2), return N; otherwise return 1"
                 ),
+                "paymentMode" to Schema.enumeration(
+                    values = listOf("ONLINE", "CASH"),
+                    description = "CASH for physical cash payments or ATM cash withdrawals (ATM WDL, CASH WITHDRAWAL, ATW); ONLINE for UPI, cards, netbanking, or bank transfers"
+                ),
                 "lineItems" to Schema.array(
                     items = lineItemSchema,
                     description = "Individual itemized receipt lines if visible on the bill/receipt; empty array if single UPI summary"
@@ -313,7 +317,9 @@ class GeminiReceiptExtractor(private val context: Context) {
      */
     suspend fun extractFromNaturalLanguageText(
         userInput: String,
-        categories: List<CategoryEntity>
+        categories: List<CategoryEntity>,
+        defaultPaymentMode: String = "ONLINE",
+        defaultCashType: TransactionType? = null
     ): ExtractionResult = withContext(Dispatchers.IO) {
         val trimmedInput = userInput.trim()
         if (trimmedInput.isEmpty()) {
@@ -337,21 +343,24 @@ class GeminiReceiptExtractor(private val context: Context) {
         val now = Date()
         val todayIso = SimpleDateFormat("yyyy-MM-dd", Locale.US).format(now)
         val nowTime24h = SimpleDateFormat("HH:mm", Locale.US).format(now)
+        val normalizedDefaultMode = if (defaultPaymentMode.equals("CASH", ignoreCase = true)) "CASH" else "ONLINE"
+        val defaultTypeHint = defaultCashType?.name ?: "EXPENSE"
 
         val prompt = """
             You are SnapSpend's precision Indian payment & receipt parser.
-            Parse the user's single payment note, voice transcription, or pasted bank alert into structured payment transaction(s).
+            Parse the user's payment note, rough cash log, voice transcription, or pasted bank alert into structured payment transaction(s).
             
             USER INPUT:
             "$trimmedInput"
             
             STRICT RULES:
             1. Allowed Categories ONLY: ${allowedCategories.joinToString(", ")}. Never invent a new category.
-            2. Clean messy UPI/bank strings (like 'UPI/412983/SWIGGY INSTAMART/BLR') into a clean human-friendly `merchant` name ('Swiggy Instamart') and put the raw string in `rawMerchantText`.
-            3. Convert rupee amounts into exact whole paise in `amountPaise` (e.g. ₹150.50 -> 15050, ₹480 -> 48000) and also set `amountText`.
-            4. If the user mentions splitting a bill equally (e.g. "split 2 ways", "divided by 3"), set `amountPaise` to the FULL bill amount and set `suggestedSplitWays` to that number (e.g. 2 or 3).
-            5. If individual items and prices are mentioned (e.g. "coffee 180 and sandwich 220"), populate `lineItems` with each item's `itemName`, `quantity`, and `pricePaise`.
-            6. If no date or time is mentioned in the note, use today's date ($todayIso) and current time ($nowTime24h).
+            2. MULTI-ITEM SPLITTING: If the user mentions multiple separate payments in one note (e.g. "40 momos, 60 auto" or "auto 60, samosa 30"), return EACH payment as a separate entry in the `payments` array with its own merchant, category, and `amountPaise`.
+            3. Clean messy UPI/bank strings (like 'UPI/412983/SWIGGY INSTAMART/BLR') into a clean human-friendly `merchant` name ('Swiggy Instamart') and put the raw string in `rawMerchantText`. For rough cash notes like "40 momos near station", set `merchant` to a clean title-cased name like "Momos Near Station" and choose the best matching `suggestedCategory` (e.g. "Food & Dining").
+            4. Convert rupee amounts into exact whole paise in `amountPaise` (e.g. ₹150.50 -> 15050, ₹40 -> 4000) and also set `amountText`.
+            5. Default `paymentMode` is "$normalizedDefaultMode" and default `type` is "$defaultTypeHint" unless the note clearly indicates otherwise (e.g. "got 500 cash from friend" -> type = "EARNING", or ATM cash withdrawal "ATM WDL" / "CASH WITHDRAWAL" / "ATW" -> type = "TRANSFER" and paymentMode = "CASH"). If `paymentMode` is "CASH", set `paymentApp` to "Cash".
+            6. If the user mentions splitting a bill equally (e.g. "split 2 ways", "divided by 3"), set `amountPaise` to the FULL bill amount and set `suggestedSplitWays` to that number (e.g. 2 or 3).
+            7. If no date or time is mentioned in the note, use today's date ($todayIso) and current time ($nowTime24h).
         """.trimIndent()
 
         try {
@@ -365,78 +374,135 @@ class GeminiReceiptExtractor(private val context: Context) {
                 }
                 text
             }
-            parseExtractionJson(rawJson, TransactionSource.MANUAL, allowedCategories)
+            parseExtractionJson(
+                jsonString = rawJson,
+                source = TransactionSource.MANUAL,
+                allowedCategories = allowedCategories,
+                defaultPaymentMode = normalizedDefaultMode,
+                defaultCashType = defaultCashType
+            )
         } catch (e: CancellationException) {
             if (e !is TimeoutCancellationException) throw e
             Log.w(TAG, "Natural-language AI timed out; using local fallback parser", e)
-            parseNaturalLanguageNoteLocally(trimmedInput, allowedCategories)
+            parseNaturalLanguageNoteLocally(trimmedInput, allowedCategories, normalizedDefaultMode, defaultCashType)
                 ?: ExtractionResult.Error("AI parsing timed out. Tap Try Again or Queue for later.")
         } catch (e: Exception) {
             Log.w(TAG, "Natural-language AI failed after retries; attempting local fallback parser", e)
-            parseNaturalLanguageNoteLocally(trimmedInput, allowedCategories)
+            parseNaturalLanguageNoteLocally(trimmedInput, allowedCategories, normalizedDefaultMode, defaultCashType)
                 ?: ExtractionResult.Error(e.localizedMessage ?: "Couldn't reach Gemini AI. Tap Try Again or Queue for later.")
         }
     }
 
     /**
-     * Local deterministic fallback parser for natural-language notes / bank SMS when offline.
+     * Local deterministic fallback parser for natural-language notes, multi-item cash logs, or bank SMS when offline.
      */
-    private fun parseNaturalLanguageNoteLocally(
+    internal fun parseNaturalLanguageNoteLocally(
         note: String,
-        allowedCategories: List<String>
+        allowedCategories: List<String>,
+        defaultPaymentMode: String = "ONLINE",
+        defaultCashType: TransactionType? = null
     ): ExtractionResult? {
+        val normalizedMode = if (defaultPaymentMode.equals("CASH", ignoreCase = true)) "CASH" else "ONLINE"
+        val segments = note.split(Regex("""[,;\n]+"""))
+            .map { it.trim() }
+            .filter { it.isNotEmpty() }
+
         val amountRegex = Regex("""(?:₹|Rs\.?|INR)?\s*(\d[\d,]*(?:\.\d{1,2})?)""", RegexOption.IGNORE_CASE)
-        val amountMatch = amountRegex.find(note) ?: return null
-        val paise = MoneyUtils.parseRupeesToPaise(amountMatch.groupValues[1]) ?: return null
-        if (paise <= 0L) return null
+        val parsedDrafts = mutableListOf<DraftTransaction>()
 
-        val splitRegex = Regex("""(?:split|divide[d]?)\s+(?:by\s+)?(\d+)\s*(?:ways|people)?""", RegexOption.IGNORE_CASE)
-        val splitWays = splitRegex.find(note)?.groupValues?.getOrNull(1)?.toIntOrNull()?.coerceIn(1, 20) ?: 1
-
-        val (cleanedMerchant, rawMerchant) = MoneyUtils.cleanRawUpiOrBankMerchant(note)
-        val atMerchantRegex = Regex("""(?:at|to|from)\s+([A-Za-z0-9 &'.\-]{2,28}?)(?:\s+(?:via|on|for|split|rs|₹)|\s*$)""", RegexOption.IGNORE_CASE)
-        val merchantCandidate = atMerchantRegex.find(note)?.groupValues?.getOrNull(1)?.trim()
-            ?: cleanedMerchant.takeIf { it.length in 2..32 && !it.equals(note, ignoreCase = true) }
-            ?: "Quick Note Payment"
-
-        val lower = note.lowercase(Locale.US)
-        val paymentApp = when {
-            lower.contains("gpay") || lower.contains("google pay") -> "GPay"
-            lower.contains("phonepe") -> "PhonePe"
-            lower.contains("paytm") -> "Paytm"
-            lower.contains("hdfc") -> "HDFC Bank"
-            lower.contains("sbi") -> "SBI"
-            lower.contains("icici") -> "ICICI Bank"
-            else -> "UPI"
+        val targetSegments = if (segments.size > 1 && segments.count { amountRegex.containsMatchIn(it) } >= 2) {
+            segments
+        } else {
+            listOf(note.trim())
         }
 
-        val defaultCat = allowedCategories.firstOrNull {
-            lower.contains("coffee") || lower.contains("dinner") || lower.contains("swiggy") || lower.contains("zomato") && it.contains("Food", ignoreCase = true)
-        } ?: allowedCategories.firstOrNull() ?: "Food & Dining"
+        for (seg in targetSegments) {
+            val amountMatch = amountRegex.find(seg) ?: continue
+            val paise = MoneyUtils.parseRupeesToPaise(amountMatch.groupValues[1]) ?: continue
+            if (paise <= 0L) continue
 
-        val baseDraft = DraftTransaction(
-            timestamp = System.currentTimeMillis(),
-            hasExplicitTime = true,
-            amountPaise = paise,
-            originalAmountPaise = paise,
-            type = if (lower.contains("credited") || lower.contains("refund") || lower.contains("received")) {
-                TransactionType.EARNING
-            } else {
-                TransactionType.EXPENSE
-            },
-            merchant = merchantCandidate,
-            rawMerchantText = rawMerchant,
-            category = defaultCat,
-            paymentApp = paymentApp,
-            referenceNumber = null,
-            status = TransactionStatus.SUCCESS,
-            note = "$note (Parsed offline)",
-            source = TransactionSource.MANUAL,
-            confidence = 0.78f
-        )
+            val splitRegex = Regex("""(?:split|divide[d]?)\s+(?:by\s+)?(\d+)\s*(?:ways|people)?""", RegexOption.IGNORE_CASE)
+            val splitWays = splitRegex.find(seg)?.groupValues?.getOrNull(1)?.toIntOrNull()?.coerceIn(1, 20) ?: 1
 
-        val finalDraft = if (splitWays > 1) baseDraft.applyEqualSplit(splitWays) else baseDraft
-        return ExtractionResult.Success(listOf(finalDraft))
+            val lower = seg.lowercase(Locale.US)
+            val isAtm = com.example.data.rules.LocalInsightsAndRulesEngine.isAtmCashWithdrawalText(seg)
+
+            val (cleanedMerchant, rawMerchant) = MoneyUtils.cleanRawUpiOrBankMerchant(seg)
+            val atMerchantRegex = Regex("""(?:at|to|from)\s+([A-Za-z0-9 &'.\-]{2,28}?)(?:\s+(?:via|on|for|split|rs|₹)|\s*$)""", RegexOption.IGNORE_CASE)
+            val strippedCashMerchant = seg
+                .replace(amountMatch.value, " ")
+                .replace(Regex("""\b(?:got|paid|spent|cash|rs\.?|inr|from|for|to|at)\b""", RegexOption.IGNORE_CASE), " ")
+                .replace(Regex("""\s+"""), " ")
+                .trim()
+                .takeIf { it.length in 2..36 }
+                ?.split(" ")
+                ?.joinToString(" ") { word ->
+                    word.replaceFirstChar { ch -> if (ch.isLowerCase()) ch.titlecase(Locale.US) else ch.toString() }
+                }
+
+            val merchantCandidate = when {
+                isAtm -> "ATM Cash Withdrawal"
+                atMerchantRegex.find(seg) != null -> atMerchantRegex.find(seg)!!.groupValues[1].trim()
+                normalizedMode == "CASH" && !strippedCashMerchant.isNullOrBlank() -> strippedCashMerchant
+                cleanedMerchant.length in 2..32 && !cleanedMerchant.equals(seg, ignoreCase = true) -> cleanedMerchant
+                !strippedCashMerchant.isNullOrBlank() -> strippedCashMerchant
+                else -> "Quick Note Payment"
+            }
+
+            val resolvedMode = if (isAtm || normalizedMode == "CASH" || lower.contains("cash")) "CASH" else "ONLINE"
+            val paymentApp = when {
+                resolvedMode == "CASH" -> "Cash"
+                lower.contains("gpay") || lower.contains("google pay") -> "GPay"
+                lower.contains("phonepe") -> "PhonePe"
+                lower.contains("paytm") -> "Paytm"
+                lower.contains("hdfc") -> "HDFC Bank"
+                lower.contains("sbi") -> "SBI"
+                lower.contains("icici") -> "ICICI Bank"
+                else -> "UPI"
+            }
+
+            val resolvedType = when {
+                isAtm || lower.contains("atm") || lower.contains("top up") || lower.contains("withdrawal") -> TransactionType.TRANSFER
+                lower.contains("credited") || lower.contains("refund") || lower.contains("received") || lower.contains("got ") -> TransactionType.EARNING
+                defaultCashType != null -> defaultCashType
+                else -> TransactionType.EXPENSE
+            }
+
+            val defaultCat = when {
+                resolvedType == TransactionType.TRANSFER -> "Transfers"
+                resolvedType == TransactionType.EARNING -> allowedCategories.firstOrNull { it.contains("Income", ignoreCase = true) || it.contains("Gift", ignoreCase = true) } ?: "Other Income"
+                lower.contains("auto") || lower.contains("cab") || lower.contains("bus") || lower.contains("metro") || lower.contains("rickshaw") || lower.contains("petrol") ->
+                    allowedCategories.firstOrNull { it.contains("Transport", ignoreCase = true) } ?: "Transport & Fuel"
+                lower.contains("momo") || lower.contains("samosa") || lower.contains("chai") || lower.contains("coffee") || lower.contains("dinner") || lower.contains("lunch") || lower.contains("swiggy") || lower.contains("zomato") ->
+                    allowedCategories.firstOrNull { it.contains("Food", ignoreCase = true) } ?: "Food & Dining"
+                lower.contains("milk") || lower.contains("bread") || lower.contains("veggie") || lower.contains("grocery") ->
+                    allowedCategories.firstOrNull { it.contains("Grocer", ignoreCase = true) } ?: "Groceries"
+                else -> allowedCategories.firstOrNull() ?: "Food & Dining"
+            }
+
+            val baseDraft = DraftTransaction(
+                timestamp = System.currentTimeMillis(),
+                hasExplicitTime = true,
+                amountPaise = paise,
+                originalAmountPaise = paise,
+                type = resolvedType,
+                merchant = merchantCandidate,
+                rawMerchantText = rawMerchant,
+                category = defaultCat,
+                paymentApp = paymentApp,
+                referenceNumber = null,
+                status = TransactionStatus.SUCCESS,
+                note = seg,
+                source = TransactionSource.MANUAL,
+                confidence = 0.82f,
+                paymentMode = resolvedMode
+            )
+
+            val finalDraft = if (splitWays > 1) baseDraft.applyEqualSplit(splitWays) else baseDraft
+            parsedDrafts.add(finalDraft)
+        }
+
+        return if (parsedDrafts.isNotEmpty()) ExtractionResult.Success(parsedDrafts) else null
     }
 
 
@@ -465,11 +531,12 @@ class GeminiReceiptExtractor(private val context: Context) {
             1. Allowed Categories ONLY: ${allowedCategories.joinToString(", ")}. Choose the single best matching `suggestedCategory` from this list. Never invent a new category.
             2. Refunds or cashbacks MUST have type = "EARNING" and suggestedCategory = "Refunds & Cashback".
             3. Money moved between the user's own bank accounts / self-transfer MUST have type = "TRANSFER".
-            4. Clean cryptic UPI or bank narration strings (e.g. 'UPI/431988271645/BLUE TOKAI/BLR') into a clean human-friendly `merchant` name ('Blue Tokai') and store the raw narration in `rawMerchantText`.
-            5. Convert the total rupee amount into exact whole paise in `amountPaise` (e.g. ₹150.50 -> 15050, ₹20 -> 2000) and also provide `amountText`.
-            6. If the image shows an itemized bill or receipt with individual items (e.g. coffee, food items, groceries), extract each line item into `lineItems` with `itemName`, `quantity`, and exact `pricePaise`.
-            7. Extract `dateIso` (YYYY-MM-DD; if only day/month is shown, assume current year from $todayIso; if missing, return "unknown") and `time24h` (HH:mm in 24-hour format; if missing, return "unknown").
-            8. If the image is too blurry/cropped to read or does not contain any payment/receipt/statement, set `isReadablePaymentDocument` = false and provide a clear `unreadableReason`.
+            4. ATM cash withdrawals ("ATM WDL", "CASH WITHDRAWAL", "ATW", "ATM CASH") MUST have type = "TRANSFER" and paymentMode = "CASH" so they top up Cash in Hand instead of being double-counted as expenses. All other UPI/card/bank payments have paymentMode = "ONLINE" unless the receipt explicitly shows a physical cash payment.
+            5. Clean cryptic UPI or bank narration strings (e.g. 'UPI/431988271645/BLUE TOKAI/BLR') into a clean human-friendly `merchant` name ('Blue Tokai') and store the raw narration in `rawMerchantText`.
+            6. Convert the total rupee amount into exact whole paise in `amountPaise` (e.g. ₹150.50 -> 15050, ₹20 -> 2000) and also provide `amountText`.
+            7. If the image shows an itemized bill or receipt with individual items (e.g. coffee, food items, groceries), extract each line item into `lineItems` with `itemName`, `quantity`, and exact `pricePaise`.
+            8. Extract `dateIso` (YYYY-MM-DD; if only day/month is shown, assume current year from $todayIso; if missing, return "unknown") and `time24h` (HH:mm in 24-hour format; if missing, return "unknown").
+            9. If the image is too blurry/cropped to read or does not contain any payment/receipt/statement, set `isReadablePaymentDocument` = false and provide a clear `unreadableReason`.
         """.trimIndent()
 
         try {
@@ -503,7 +570,9 @@ class GeminiReceiptExtractor(private val context: Context) {
     private fun parseExtractionJson(
         jsonString: String,
         source: TransactionSource,
-        allowedCategories: List<String>
+        allowedCategories: List<String>,
+        defaultPaymentMode: String = "ONLINE",
+        defaultCashType: TransactionType? = null
     ): ExtractionResult {
         val root = JSONObject(jsonString)
         val isReadable = root.optBoolean("isReadablePaymentDocument", true)
@@ -533,8 +602,8 @@ class GeminiReceiptExtractor(private val context: Context) {
                 else -> 0L
             }
 
-            val typeStr = item.optString("type", "EXPENSE").uppercase(Locale.US)
-            val type = runCatching { TransactionType.valueOf(typeStr) }.getOrDefault(TransactionType.EXPENSE)
+            val typeStr = item.optString("type", defaultCashType?.name ?: "EXPENSE").uppercase(Locale.US)
+            val parsedType = runCatching { TransactionType.valueOf(typeStr) }.getOrDefault(defaultCashType ?: TransactionType.EXPENSE)
 
             val rawMerchantField = item.optString("merchant", "unknown").trim().ifBlank { "unknown" }
             val explicitRawText = item.optString("rawMerchantText", "").trim()
@@ -543,7 +612,29 @@ class GeminiReceiptExtractor(private val context: Context) {
             val (cleanedMerchant, fallbackRaw) = MoneyUtils.cleanRawUpiOrBankMerchant(rawMerchantField)
             val finalRawMerchant = explicitRawText.ifBlank { fallbackRaw }
 
-            val paymentApp = item.optString("paymentApp", "Unknown").trim().ifBlank { "Unknown" }
+            val note = item.optString("note", "").takeIf { !it.equals("unknown", ignoreCase = true) }.orEmpty()
+            val isAtmWithdrawal = com.example.data.rules.LocalInsightsAndRulesEngine.isAtmCashWithdrawalText(rawMerchantField) ||
+                com.example.data.rules.LocalInsightsAndRulesEngine.isAtmCashWithdrawalText(finalRawMerchant) ||
+                com.example.data.rules.LocalInsightsAndRulesEngine.isAtmCashWithdrawalText(note)
+
+            val type = if (isAtmWithdrawal) TransactionType.TRANSFER else parsedType
+            val rawModeStr = item.optString("paymentMode", defaultPaymentMode).uppercase(Locale.US)
+            val resolvedPaymentMode = when {
+                isAtmWithdrawal -> "CASH"
+                defaultPaymentMode.equals("CASH", ignoreCase = true) -> "CASH"
+                rawModeStr == "CASH" -> "CASH"
+                else -> "ONLINE"
+            }
+
+            val rawPaymentApp = item.optString("paymentApp", if (resolvedPaymentMode == "CASH") "Cash" else "Unknown").trim().ifBlank {
+                if (resolvedPaymentMode == "CASH") "Cash" else "Unknown"
+            }
+            val paymentApp = if (resolvedPaymentMode == "CASH" && (rawPaymentApp.equals("Unknown", ignoreCase = true) || rawPaymentApp.isBlank())) {
+                "Cash"
+            } else {
+                rawPaymentApp
+            }
+
             val refRaw = item.optString("referenceNumber", "unknown").trim()
             val referenceNumber = if (refRaw.equals("unknown", ignoreCase = true) || refRaw.isBlank()) null else refRaw
 
@@ -551,11 +642,13 @@ class GeminiReceiptExtractor(private val context: Context) {
             val status = runCatching { TransactionStatus.valueOf(statusStr) }.getOrDefault(TransactionStatus.SUCCESS)
 
             val rawCategory = item.optString("suggestedCategory", "Other")
-            val validCategory = allowedCategories.firstOrNull { it.equals(rawCategory, ignoreCase = true) }
-                ?: if (type == TransactionType.EARNING) "Other Income" else "Other"
+            val validCategory = when {
+                isAtmWithdrawal || type == TransactionType.TRANSFER -> "Transfers"
+                else -> allowedCategories.firstOrNull { it.equals(rawCategory, ignoreCase = true) }
+                    ?: if (type == TransactionType.EARNING) "Other Income" else "Other"
+            }
 
             val confidence = item.optDouble("confidence", 0.85).toFloat().coerceIn(0f, 1f)
-            val note = item.optString("note", "").takeIf { !it.equals("unknown", ignoreCase = true) }.orEmpty()
             val suggestedSplitWays = item.optInt("suggestedSplitWays", 1).coerceIn(1, 20)
 
             val lineItemsArray = item.optJSONArray("lineItems")
@@ -597,7 +690,8 @@ class GeminiReceiptExtractor(private val context: Context) {
                 note = note,
                 source = source,
                 confidence = confidence,
-                lineItems = parsedLineItems
+                lineItems = parsedLineItems,
+                paymentMode = resolvedPaymentMode
             )
 
             val finalDraft = if (suggestedSplitWays > 1) {

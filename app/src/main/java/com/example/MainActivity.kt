@@ -134,6 +134,7 @@ import com.example.ui.screens.DataCheckScreen
 import com.example.ui.screens.HomeScreen
 import com.example.ui.screens.QuickAddSourceBottomSheet
 import com.example.ui.screens.SettingsAndBackupScreen
+import com.example.ui.screens.SmartCashLogDialog
 import com.example.ui.screens.TransactionEditorDialog
 import com.example.ui.screens.TransactionsScreen
 import com.example.ui.screens.TrashScreen
@@ -380,6 +381,7 @@ fun SnapSpendRootScreen(
     var currentTab by rememberSaveable { mutableStateOf(initialTab) }
     var showQuickAddSheet by rememberSaveable { mutableStateOf(false) }
     var showAiNoteDialog by rememberSaveable { mutableStateOf(false) }
+    var showSmartCashDialog by rememberSaveable { mutableStateOf(false) }
     var showBudgetSetupDialog by rememberSaveable { mutableStateOf(false) }
     var showTransactionEditor by remember { mutableStateOf(false) }
     var editingTransaction by remember { mutableStateOf<TransactionEntity?>(null) }
@@ -734,7 +736,8 @@ fun SnapSpendRootScreen(
                                                 status = TransactionStatus.SUCCESS,
                                                 note = "",
                                                 createdAt = nowMillis,
-                                                source = TransactionSource.MANUAL
+                                                source = TransactionSource.MANUAL,
+                                                paymentMode = chip.paymentMode
                                             )
                                             showTransactionEditor = true
                                         },
@@ -751,6 +754,26 @@ fun SnapSpendRootScreen(
                                         onCategoryFilterChange = viewModel::updateCategoryFilter,
                                         onTypeFilterChange = viewModel::updateTypeFilter,
                                         onPaymentAppFilterChange = viewModel::updatePaymentAppFilter,
+                                        onPaymentModeFilterChange = viewModel::updatePaymentModeFilter,
+                                        onTopUpCashWalletClick = {
+                                            val nowMillis = System.currentTimeMillis()
+                                            editingTransaction = TransactionEntity(
+                                                id = 0L,
+                                                timestamp = nowMillis,
+                                                hasExplicitTime = true,
+                                                amountPaise = 0L,
+                                                type = TransactionType.TRANSFER,
+                                                merchant = "ATM Withdrawal",
+                                                category = "Other",
+                                                paymentApp = "Cash",
+                                                status = TransactionStatus.SUCCESS,
+                                                note = "ATM Withdrawal / Cash Wallet Top-Up",
+                                                createdAt = nowMillis,
+                                                source = TransactionSource.MANUAL,
+                                                paymentMode = "CASH"
+                                            )
+                                            showTransactionEditor = true
+                                        },
                                         onClearFilters = viewModel::clearAllFilters,
                                         onTransactionClick = { tx ->
                                             editingTransaction = tx
@@ -787,6 +810,7 @@ fun SnapSpendRootScreen(
                                         uiState = uiState,
                                         onChartDateRangeChange = viewModel::updateChartDateRange,
                                         onLineGranularityChange = viewModel::updateLineGranularity,
+                                        onChartPaymentModeFilterChange = viewModel::updateChartPaymentModeFilter,
                                         onSaveBudget = { category, limitPaise ->
                                             if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU &&
                                                 notificationPermissionStatus != "ALLOWED" &&
@@ -994,6 +1018,9 @@ fun SnapSpendRootScreen(
                     showAiNoteDialog = true
                 }
             },
+            onLogCashPayment = {
+                showSmartCashDialog = true
+            },
             onTrySampleAiReceipt = {
                 performWithFirstScanNoticeCheck {
                     viewModel.scanSampleUpiScreenshotWithGemini(samplePresetCounter++)
@@ -1012,6 +1039,18 @@ fun SnapSpendRootScreen(
             onDismiss = { showAiNoteDialog = false },
             onSubmitNote = { userNote ->
                 viewModel.processNaturalLanguageNoteWithGemini(userNote)
+            }
+        )
+    }
+
+    // Smart Cash Log (One-Line AI Auto-Sort) Dialog
+    if (showSmartCashDialog) {
+        SmartCashLogDialog(
+            onDismiss = { showSmartCashDialog = false },
+            onSubmitCashNote = { cashNote, cashType ->
+                performWithFirstScanNoticeCheck {
+                    viewModel.processSmartCashLogWithGemini(cashNote, cashType)
+                }
             }
         )
     }
@@ -1264,24 +1303,24 @@ private fun EditorialBottomNavBar(
 
     // Animated container theme colors
     val animatedBarBg by animateColorAsState(
-        targetValue = if (isDark) Color(0xFF14141E) else EditorialBg,
+        targetValue = if (isDark) DarkCardSurface else EditorialBg,
         animationSpec = Motion.quickTween(reducedMotion),
         label = "navBarBg"
     )
     val animatedBarBorder by animateColorAsState(
-        targetValue = if (isDark) Color(0xFF2E2E40) else InkBlack,
+        targetValue = if (isDark) DarkSubtleBorder else InkBlack,
         animationSpec = Motion.quickTween(reducedMotion),
         label = "navBarBorder"
     )
     val animatedExtrusionColor by animateColorAsState(
-        targetValue = if (isDark) Color(0xFF09090E) else InkBlack,
+        targetValue = if (isDark) InkBlack else InkBlack,
         animationSpec = Motion.quickTween(reducedMotion),
         label = "navBarExtrusion"
     )
 
     // Animated pill theme colors
     val targetPillBg = if (isDark) {
-        Color(0xFF262338)
+        Color(0xFF303440)
     } else {
         currentTab.activeAccentColor
     }

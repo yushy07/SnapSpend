@@ -267,7 +267,8 @@ interface TransactionDao {
                     id = existing.id,
                     category = if (incoming.category.isNotBlank() && incoming.category != "Other") incoming.category else existing.category,
                     categoryId = if (incoming.categoryId != 0L) incoming.categoryId else existing.categoryId,
-                    note = incoming.note.ifBlank { existing.note }
+                    note = incoming.note.ifBlank { existing.note },
+                    paymentMode = if (incoming.paymentMode == "CASH") "CASH" else existing.paymentMode
                 )
                 updateTransaction(upgraded)
                 existing.id
@@ -328,6 +329,12 @@ interface TransactionDao {
 
     @Query("SELECT COUNT(*) FROM transactions WHERE deletedAtMillis IS NOT NULL")
     suspend fun getDataCheckTrashedCount(): Int
+
+    @Query("SELECT COUNT(*) FROM transactions WHERE deletedAtMillis IS NULL AND paymentMode = 'ONLINE'")
+    suspend fun getDataCheckOnlineActiveCount(): Int
+
+    @Query("SELECT COUNT(*) FROM transactions WHERE deletedAtMillis IS NULL AND paymentMode = 'CASH'")
+    suspend fun getDataCheckCashActiveCount(): Int
 
     @Query(
         """

@@ -58,6 +58,7 @@ import androidx.compose.material.icons.filled.Check
 import androidx.compose.material.icons.filled.Delete
 import androidx.compose.material.icons.filled.DocumentScanner
 import androidx.compose.material.icons.filled.Mic
+import androidx.compose.material.icons.filled.Payments
 import androidx.compose.material.icons.filled.PhotoCamera
 import androidx.compose.material.icons.filled.PictureAsPdf
 import androidx.compose.material.icons.filled.Refresh
@@ -128,6 +129,7 @@ import com.example.ui.theme.EditorialAqua
 import com.example.ui.theme.EditorialCardPalette
 import com.example.ui.theme.EditorialCoral
 import com.example.ui.theme.EditorialLavender
+import com.example.ui.theme.EditorialMint
 import com.example.ui.theme.EditorialPink
 import com.example.ui.theme.InkBlack
 import com.example.ui.theme.LimeAccent
@@ -154,6 +156,7 @@ fun QuickAddSourceBottomSheet(
     onPickScreenshots: () -> Unit,
     onPickPdf: () -> Unit,
     onAiQuickNote: () -> Unit,
+    onLogCashPayment: () -> Unit = {},
     onTrySampleAiReceipt: () -> Unit = {},
     onManualAdd: () -> Unit
 ) {
@@ -353,6 +356,81 @@ fun QuickAddSourceBottomSheet(
                             )
                             Text(
                                 text = "Say or paste a quick note, like a bank SMS.",
+                                style = MaterialTheme.typography.bodyMedium.copy(fontWeight = FontWeight.SemiBold),
+                                color = BrightCardBlack
+                            )
+                        }
+                    }
+                }
+            }
+
+            // 2.5 Log Cash Payment (Mint #9FE3C0 3D Featured Cash Card)
+            Editorial3DLayerBox(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .staggeredItemReveal(index = 2, staggerMs = Motion.STAGGER_SHEET_MS),
+                shape = RoundedCornerShape(28.dp),
+                depthX = 3.dp,
+                depthY = 5.dp,
+                extrusionColor = if (isDark) BrightCardBlack else InkBlack,
+                enableInteractiveTilt = false
+            ) {
+                Surface(
+                    onClick = {
+                        Motion.performLightTapHaptic(view)
+                        onDismiss()
+                        onLogCashPayment()
+                    },
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .testTag("sheet_smart_cash_log_button"),
+                    shape = RoundedCornerShape(28.dp),
+                    color = EditorialMint,
+                    border = BorderStroke(1.8.dp, BrightCardBlack)
+                ) {
+                    Row(
+                        modifier = Modifier.padding(18.dp),
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.spacedBy(14.dp)
+                    ) {
+                        Box(
+                            modifier = Modifier
+                                .size(44.dp)
+                                .clip(CircleShape)
+                                .background(BrightCardBlack),
+                            contentAlignment = Alignment.Center
+                        ) {
+                            Icon(
+                                imageVector = Icons.Default.Payments,
+                                contentDescription = null,
+                                tint = PureWhite
+                            )
+                        }
+                        Column(modifier = Modifier.weight(1f)) {
+                            Row(
+                                verticalAlignment = Alignment.CenterVertically,
+                                horizontalArrangement = Arrangement.spacedBy(8.dp)
+                            ) {
+                                Text(
+                                    text = "LOG CASH PAYMENT",
+                                    style = CondensedCardTitleStyle.copy(fontSize = 22.sp),
+                                    color = BrightCardBlack
+                                )
+                                Surface(
+                                    shape = RoundedCornerShape(8.dp),
+                                    color = SunnyYellow,
+                                    border = BorderStroke(1.4.dp, BrightCardBlack)
+                                ) {
+                                    Text(
+                                        text = "[CASH]",
+                                        modifier = Modifier.padding(horizontal = 6.dp, vertical = 2.dp),
+                                        style = MaterialTheme.typography.labelSmall.copy(fontWeight = FontWeight.Black),
+                                        color = BrightCardBlack
+                                    )
+                                }
+                            }
+                            Text(
+                                text = "Type or say '40 momos, 60 auto' — AI sorts merchant & category.",
                                 style = MaterialTheme.typography.bodyMedium.copy(fontWeight = FontWeight.SemiBold),
                                 color = BrightCardBlack
                             )
@@ -634,6 +712,388 @@ fun AiNaturalLanguageNoteDialog(
             }
         }
     )
+}
+
+/**
+ * Pure helper for Smart Cash Log quick amount buttons (+₹10, +₹20, +₹50, +₹100, +₹500).
+ * Inserts the rupee amount into the note text, or adds to the existing numeric amount in the active segment.
+ */
+fun applyQuickAmountToCashNote(currentNote: String, addRupees: Int): String {
+    if (addRupees <= 0) return currentNote
+    val trimmed = currentNote.trim()
+    if (trimmed.isEmpty()) {
+        return "$addRupees "
+    }
+    val lastCommaIdx = currentNote.lastIndexOf(',')
+    val prefix = if (lastCommaIdx >= 0) currentNote.substring(0, lastCommaIdx + 1) else ""
+    val activeSegment = if (lastCommaIdx >= 0) currentNote.substring(lastCommaIdx + 1) else currentNote
+
+    val numberRegex = Regex("""\b(\d+(?:\.\d+)?)\b""")
+    val matches = numberRegex.findAll(activeSegment).toList()
+    if (matches.isNotEmpty()) {
+        val lastMatch = matches.last()
+        val existingVal = lastMatch.value.toDoubleOrNull()
+        if (existingVal != null) {
+            val updatedVal = existingVal + addRupees
+            val formattedVal = if (updatedVal % 1.0 == 0.0) {
+                updatedVal.toLong().toString()
+            } else {
+                String.format(Locale.US, "%.2f", updatedVal)
+            }
+            val updatedSegment = activeSegment.replaceRange(lastMatch.range, formattedVal)
+            return prefix + updatedSegment
+        }
+    }
+    val separator = if (activeSegment.endsWith(" ")) "" else " "
+    return prefix + activeSegment + separator + addRupees
+}
+
+/**
+ * Chunky 3D "Smart Cash Log" Dialog (AI Auto-Sort for one-line or multi-item cash notes).
+ */
+@Composable
+fun SmartCashLogDialog(
+    onDismiss: () -> Unit,
+    onSubmitCashNote: (String, TransactionType) -> Unit
+) {
+    val tokens = SnapSpendThemeTokens.colors
+    val isDark = tokens.isDark
+    val context = LocalContext.current
+    val view = LocalView.current
+
+    var noteText by remember { mutableStateOf("") }
+    var selectedCashType by remember { mutableStateOf(TransactionType.EXPENSE) }
+    var voiceStatusHint by remember { mutableStateOf<String?>(null) }
+
+    val speechLauncher = rememberLauncherForActivityResult(
+        contract = ActivityResultContracts.StartActivityForResult()
+    ) { result ->
+        if (result.resultCode == Activity.RESULT_OK) {
+            val matches = result.data?.getStringArrayListExtra(RecognizerIntent.EXTRA_RESULTS)
+            val spoken = matches?.firstOrNull().orEmpty()
+            if (spoken.isNotBlank()) {
+                noteText = if (noteText.isBlank()) spoken else "$noteText, $spoken"
+                voiceStatusHint = null
+            }
+        }
+    }
+
+    val launchSpeechRecognizer = {
+        try {
+            val intent = Intent(RecognizerIntent.ACTION_RECOGNIZE_SPEECH).apply {
+                putExtra(
+                    RecognizerIntent.EXTRA_LANGUAGE_MODEL,
+                    RecognizerIntent.LANGUAGE_MODEL_FREE_FORM
+                )
+                putExtra(RecognizerIntent.EXTRA_LANGUAGE, Locale.getDefault())
+                putExtra(
+                    RecognizerIntent.EXTRA_PROMPT,
+                    "Say cash note like '40 momos, 60 auto'"
+                )
+            }
+            if (intent.resolveActivity(context.packageManager) != null) {
+                speechLauncher.launch(intent)
+            } else {
+                voiceStatusHint = "Speech recognition isn't available on this device — type your note below."
+            }
+        } catch (_: Exception) {
+            voiceStatusHint = "Speech recognition isn't available on this device — type your note below."
+        }
+    }
+
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        modifier = Modifier.dialogScaleFadeEntrance(),
+        containerColor = tokens.cardSurface,
+        titleContentColor = tokens.primaryText,
+        textContentColor = tokens.primaryText,
+        title = {
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.SpaceBetween,
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                Column(modifier = Modifier.weight(1f)) {
+                    Row(
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.spacedBy(8.dp)
+                    ) {
+                        Text(
+                            text = "SMART CASH LOG",
+                            style = CondensedCardTitleStyle.copy(fontSize = 24.sp),
+                            color = tokens.primaryText
+                        )
+                        Surface(
+                            shape = RoundedCornerShape(8.dp),
+                            color = SunnyYellow,
+                            border = BorderStroke(1.5.dp, BrightCardBlack)
+                        ) {
+                            Text(
+                                text = "[CASH]",
+                                modifier = Modifier.padding(horizontal = 7.dp, vertical = 2.dp),
+                                style = MaterialTheme.typography.labelSmall.copy(fontWeight = FontWeight.Black),
+                                color = BrightCardBlack
+                            )
+                        }
+                    }
+                    Spacer(modifier = Modifier.height(2.dp))
+                    Text(
+                        text = "Type or say '40 momos, 60 auto' — AI sorts merchant & category.",
+                        style = MaterialTheme.typography.labelSmall.copy(fontWeight = FontWeight.Bold),
+                        color = tokens.secondaryText
+                    )
+                }
+                BlackCircleIconButton(
+                    icon = Icons.Default.Mic,
+                    contentDescription = "Speak cash note",
+                    size = 44.dp,
+                    onClick = launchSpeechRecognizer,
+                    testTag = "smart_cash_mic_button"
+                )
+            }
+        },
+        text = {
+            Column(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .verticalScroll(rememberScrollState()),
+                verticalArrangement = Arrangement.spacedBy(12.dp)
+            ) {
+                OutlinedTextField(
+                    value = noteText,
+                    onValueChange = { noteText = it },
+                    label = { Text("Rough cash note (single or multi-item)", color = tokens.secondaryText) },
+                    placeholder = {
+                        Text(
+                            "40 momos near station, or auto 60, samosa 30",
+                            color = tokens.secondaryText.copy(alpha = 0.7f)
+                        )
+                    },
+                    trailingIcon = {
+                        Surface(
+                            onClick = launchSpeechRecognizer,
+                            shape = CircleShape,
+                            color = SunnyYellow,
+                            border = BorderStroke(1.4.dp, BrightCardBlack),
+                            modifier = Modifier.padding(end = 6.dp)
+                        ) {
+                            Icon(
+                                imageVector = Icons.Default.Mic,
+                                contentDescription = "Speak cash note",
+                                tint = BrightCardBlack,
+                                modifier = Modifier
+                                    .padding(8.dp)
+                                    .size(18.dp)
+                            )
+                        }
+                    },
+                    minLines = 2,
+                    maxLines = 4,
+                    colors = OutlinedTextFieldDefaults.colors(
+                        focusedBorderColor = tokens.primaryText,
+                        unfocusedBorderColor = tokens.subtleDivider,
+                        focusedTextColor = tokens.primaryText,
+                        unfocusedTextColor = tokens.primaryText,
+                        cursorColor = tokens.primaryText
+                    ),
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .testTag("smart_cash_note_input")
+                )
+
+                // Quick amount chips (+₹10, +₹20, +₹50, +₹100, +₹500)
+                Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
+                    Text(
+                        text = "Quick amount (+ into note):",
+                        style = MaterialTheme.typography.labelMedium.copy(fontWeight = FontWeight.ExtraBold),
+                        color = tokens.primaryText
+                    )
+                    Row(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .horizontalScroll(rememberScrollState()),
+                        horizontalArrangement = Arrangement.spacedBy(8.dp)
+                    ) {
+                        listOf(10, 20, 50, 100, 500).forEach { rupees ->
+                            Surface(
+                                onClick = {
+                                    Motion.performLightTapHaptic(view)
+                                    noteText = applyQuickAmountToCashNote(noteText, rupees)
+                                },
+                                shape = CircleShape,
+                                color = SunnyYellow,
+                                border = BorderStroke(1.6.dp, BrightCardBlack),
+                                modifier = Modifier.testTag("smart_cash_quick_add_$rupees")
+                            ) {
+                                Text(
+                                    text = "+₹$rupees",
+                                    modifier = Modifier.padding(horizontal = 12.dp, vertical = 7.dp),
+                                    style = MaterialTheme.typography.labelLarge.copy(fontWeight = FontWeight.Black),
+                                    color = BrightCardBlack
+                                )
+                            }
+                        }
+                    }
+                }
+
+                // 3-way Cash Flow Toggle
+                Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
+                    Text(
+                        text = "Cash direction:",
+                        style = MaterialTheme.typography.labelMedium.copy(fontWeight = FontWeight.ExtraBold),
+                        color = tokens.primaryText
+                    )
+                    val cashOptions = listOf(
+                        Triple(TransactionType.EXPENSE, "Spent Cash (Expense)", "smart_cash_type_expense"),
+                        Triple(TransactionType.EARNING, "Received Cash (Earning)", "smart_cash_type_earning"),
+                        Triple(TransactionType.TRANSFER, "ATM Withdrawal / Wallet Top-up (Transfer)", "smart_cash_type_transfer")
+                    )
+                    cashOptions.forEach { (typeOption, label, tag) ->
+                        val isSelected = selectedCashType == typeOption
+                        Surface(
+                            onClick = {
+                                Motion.performLightTapHaptic(view)
+                                selectedCashType = typeOption
+                            },
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .testTag(tag),
+                            shape = RoundedCornerShape(16.dp),
+                            color = if (isSelected) SunnyYellow else tokens.cardSurface,
+                            border = BorderStroke(if (isSelected) 2.dp else 1.4.dp, if (isSelected) BrightCardBlack else tokens.subtleDivider)
+                        ) {
+                            Row(
+                                modifier = Modifier.padding(horizontal = 12.dp, vertical = 10.dp),
+                                verticalAlignment = Alignment.CenterVertically,
+                                horizontalArrangement = Arrangement.SpaceBetween
+                            ) {
+                                Text(
+                                    text = label,
+                                    style = MaterialTheme.typography.labelLarge.copy(
+                                        fontWeight = if (isSelected) FontWeight.Black else FontWeight.Bold
+                                    ),
+                                    color = if (isSelected) BrightCardBlack else tokens.primaryText,
+                                    modifier = Modifier.weight(1f)
+                                )
+                                if (isSelected) {
+                                    Icon(
+                                        imageVector = Icons.Default.Check,
+                                        contentDescription = null,
+                                        tint = BrightCardBlack,
+                                        modifier = Modifier.size(18.dp)
+                                    )
+                                }
+                            }
+                        }
+                    }
+                }
+
+                if (voiceStatusHint != null) {
+                    Text(
+                        text = voiceStatusHint!!,
+                        style = MaterialTheme.typography.labelSmall.copy(fontWeight = FontWeight.Bold),
+                        color = tokens.primaryText
+                    )
+                }
+            }
+        },
+        confirmButton = {
+            Button(
+                onClick = {
+                    if (noteText.isNotBlank()) {
+                        onSubmitCashNote(noteText.trim(), selectedCashType)
+                        onDismiss()
+                    }
+                },
+                enabled = noteText.isNotBlank(),
+                modifier = Modifier.testTag("smart_cash_sort_ai_button"),
+                colors = ButtonDefaults.buttonColors(
+                    containerColor = SunnyYellow,
+                    contentColor = BrightCardBlack
+                ),
+                shape = CircleShape,
+                border = BorderStroke(2.dp, BrightCardBlack)
+            ) {
+                Icon(Icons.Default.AutoAwesome, contentDescription = null, tint = BrightCardBlack, modifier = Modifier.size(18.dp))
+                Spacer(modifier = Modifier.width(6.dp))
+                Text("SORT WITH AI", fontWeight = FontWeight.Black, color = BrightCardBlack)
+            }
+        },
+        dismissButton = {
+            TextButton(onClick = onDismiss) {
+                Text("Cancel", color = tokens.primaryText, fontWeight = FontWeight.Bold)
+            }
+        }
+    )
+}
+
+/**
+ * Chunky 2-way "Online | Cash" segmented pill used on AI Review Cards, Draft Edit Dialog, and Manual Add/Edit Dialog.
+ */
+@Composable
+fun OnlineCashSegmentedPill(
+    paymentMode: String,
+    onModeChange: (String) -> Unit,
+    modifier: Modifier = Modifier,
+    tagPrefix: String = "payment_mode"
+) {
+    val view = LocalView.current
+    val isCash = paymentMode.equals("CASH", ignoreCase = true)
+    Surface(
+        modifier = modifier,
+        shape = CircleShape,
+        color = PureWhite,
+        border = BorderStroke(1.8.dp, BrightCardBlack)
+    ) {
+        Row(
+            modifier = Modifier.padding(3.dp),
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.spacedBy(4.dp)
+        ) {
+            Surface(
+                onClick = {
+                    if (isCash) {
+                        Motion.performLightTapHaptic(view)
+                        onModeChange("ONLINE")
+                    }
+                },
+                shape = CircleShape,
+                color = if (!isCash) EditorialAqua else Color.Transparent,
+                border = if (!isCash) BorderStroke(1.4.dp, BrightCardBlack) else null,
+                modifier = Modifier.testTag("${tagPrefix}_online")
+            ) {
+                Text(
+                    text = "Online",
+                    modifier = Modifier.padding(horizontal = 12.dp, vertical = 5.dp),
+                    style = MaterialTheme.typography.labelMedium.copy(
+                        fontWeight = if (!isCash) FontWeight.Black else FontWeight.Bold
+                    ),
+                    color = BrightCardBlack
+                )
+            }
+            Surface(
+                onClick = {
+                    if (!isCash) {
+                        Motion.performLightTapHaptic(view)
+                        onModeChange("CASH")
+                    }
+                },
+                shape = CircleShape,
+                color = if (isCash) SunnyYellow else Color.Transparent,
+                border = if (isCash) BorderStroke(1.4.dp, BrightCardBlack) else null,
+                modifier = Modifier.testTag("${tagPrefix}_cash")
+            ) {
+                Text(
+                    text = "Cash",
+                    modifier = Modifier.padding(horizontal = 12.dp, vertical = 5.dp),
+                    style = MaterialTheme.typography.labelMedium.copy(
+                        fontWeight = if (isCash) FontWeight.Black else FontWeight.Bold
+                    ),
+                    color = BrightCardBlack
+                )
+            }
+        }
+    }
 }
 
 /**
@@ -1103,6 +1563,12 @@ fun AiReviewDeckOverlay(
                                                     text = "Gemini Parsed · ${draft.source.name}",
                                                     backgroundColor = PureWhite
                                                 )
+                                                if (draft.paymentMode.equals("CASH", ignoreCase = true)) {
+                                                    StatusPillBadge(
+                                                        text = "[CASH]",
+                                                        backgroundColor = SunnyYellow
+                                                    )
+                                                }
                                                 if (draft.isLowConfidence) {
                                                     StatusPillBadge(
                                                         text = "Low confidence · Check me",
@@ -1277,6 +1743,39 @@ fun AiReviewDeckOverlay(
                                                     )
                                                 }
                                             }
+                                        }
+
+                                        Spacer(modifier = Modifier.height(10.dp))
+
+                                        // Online | Cash Segmented Pill on each AI Review Card
+                                        Row(
+                                            modifier = Modifier.fillMaxWidth(),
+                                            horizontalArrangement = Arrangement.SpaceBetween,
+                                            verticalAlignment = Alignment.CenterVertically
+                                        ) {
+                                            Text(
+                                                text = "Payment mode:",
+                                                style = MaterialTheme.typography.labelLarge.copy(fontWeight = FontWeight.Black),
+                                                color = BrightCardBlack
+                                            )
+                                            OnlineCashSegmentedPill(
+                                                paymentMode = draft.paymentMode,
+                                                onModeChange = { newMode ->
+                                                    val updatedApp = if (newMode == "CASH") {
+                                                        if (draft.paymentApp.isBlank() || draft.paymentApp.equals("Unknown", ignoreCase = true)) "Cash" else draft.paymentApp
+                                                    } else {
+                                                        if (draft.paymentApp.equals("Cash", ignoreCase = true)) "GPay" else draft.paymentApp
+                                                    }
+                                                    onUpdateDraft(
+                                                        draft.copy(
+                                                            paymentMode = newMode,
+                                                            paymentApp = updatedApp
+                                                        ),
+                                                        false
+                                                    )
+                                                },
+                                                tagPrefix = "review_card_${idx}_mode"
+                                            )
                                         }
 
                                         Spacer(modifier = Modifier.height(10.dp))
@@ -1533,6 +2032,7 @@ private fun DraftEditDialog(
         mutableStateOf(if (draft.hasExplicitTime) MoneyUtils.formatTime24h(draft.timestamp) else "")
     }
     var paymentAppInput by remember(draft) { mutableStateOf(draft.paymentApp) }
+    var selectedPaymentMode by remember(draft) { mutableStateOf(draft.paymentMode) }
     var refInput by remember(draft) { mutableStateOf(draft.referenceNumber.orEmpty()) }
 
     val fieldColors = OutlinedTextFieldDefaults.colors(
@@ -1580,6 +2080,24 @@ private fun DraftEditDialog(
                     colors = fieldColors,
                     modifier = Modifier.fillMaxWidth()
                 )
+
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.SpaceBetween,
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    Text("Mode:", style = MaterialTheme.typography.labelLarge, color = tokens.primaryText)
+                    OnlineCashSegmentedPill(
+                        paymentMode = selectedPaymentMode,
+                        onModeChange = { newMode ->
+                            selectedPaymentMode = newMode
+                            if (newMode == "CASH" && (paymentAppInput.isBlank() || paymentAppInput.equals("Unknown", ignoreCase = true))) {
+                                paymentAppInput = "Cash"
+                            }
+                        },
+                        tagPrefix = "draft_edit_mode"
+                    )
+                }
 
                 Text("Type:", style = MaterialTheme.typography.labelLarge, color = tokens.primaryText)
                 Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
@@ -1674,8 +2192,9 @@ private fun DraftEditDialog(
                             status = selectedStatus,
                             timestamp = ts,
                             hasExplicitTime = hasTime,
-                            paymentApp = paymentAppInput.trim().ifEmpty { "Unknown" },
-                            referenceNumber = refInput.trim().ifEmpty { null }
+                            paymentApp = paymentAppInput.trim().ifEmpty { if (selectedPaymentMode == "CASH") "Cash" else "Unknown" },
+                            referenceNumber = refInput.trim().ifEmpty { null },
+                            paymentMode = selectedPaymentMode
                         ),
                         catChanged
                     )
@@ -1737,6 +2256,11 @@ fun TransactionEditorDialog(
     }
     var paymentAppInput by remember(initialTransaction) {
         mutableStateOf(initialTransaction?.paymentApp ?: "GPay")
+    }
+    var selectedPaymentMode by remember(initialTransaction) {
+        mutableStateOf(
+            if (initialTransaction?.paymentMode.equals("CASH", ignoreCase = true)) "CASH" else "ONLINE"
+        )
     }
     var refInput by remember(initialTransaction) {
         mutableStateOf(initialTransaction?.referenceNumber.orEmpty())
@@ -1881,6 +2405,26 @@ fun TransactionEditorDialog(
                         .testTag("manual_merchant_input")
                 )
 
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.SpaceBetween,
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    Text("Payment Mode:", style = MaterialTheme.typography.labelLarge, color = tokens.primaryText)
+                    OnlineCashSegmentedPill(
+                        paymentMode = selectedPaymentMode,
+                        onModeChange = { newMode ->
+                            selectedPaymentMode = newMode
+                            if (newMode == "CASH" && (paymentAppInput.equals("GPay", ignoreCase = true) || paymentAppInput.equals("Unknown", ignoreCase = true))) {
+                                paymentAppInput = "Cash"
+                            } else if (newMode == "ONLINE" && paymentAppInput.equals("Cash", ignoreCase = true)) {
+                                paymentAppInput = "GPay"
+                            }
+                        },
+                        tagPrefix = "manual_editor_mode"
+                    )
+                }
+
                 Text("Type:", style = MaterialTheme.typography.labelLarge, color = tokens.primaryText)
                 Row(
                     modifier = Modifier.horizontalScroll(rememberScrollState()),
@@ -1947,7 +2491,12 @@ fun TransactionEditorDialog(
                         WhitePillChip(
                             label = app,
                             selected = paymentAppInput.equals(app, ignoreCase = true),
-                            onClick = { paymentAppInput = app }
+                            onClick = {
+                                paymentAppInput = app
+                                if (app.equals("Cash", ignoreCase = true)) {
+                                    selectedPaymentMode = "CASH"
+                                }
+                            }
                         )
                     }
                 }
@@ -2041,7 +2590,8 @@ fun TransactionEditorDialog(
                             status = selectedStatus,
                             note = noteInput.trim(),
                             source = initialTransaction?.source ?: TransactionSource.MANUAL,
-                            duplicateKey = dupKey
+                            duplicateKey = dupKey,
+                            paymentMode = selectedPaymentMode
                         ),
                         categoryChanged
                     )

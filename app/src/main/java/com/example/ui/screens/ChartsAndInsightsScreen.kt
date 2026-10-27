@@ -44,6 +44,7 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.example.data.local.RepeatingState
 import com.example.ui.DateRangeFilter
+import com.example.ui.PaymentModeFilter
 import com.example.ui.SnapSpendUiState
 import com.example.ui.components.CoralComparisonBarChartCard
 import com.example.ui.components.DarkLiveInsightCard
@@ -90,6 +91,7 @@ fun ChartsAndInsightsScreen(
     onLineGranularityChange: (String) -> Unit,
     onSaveBudget: (categoryName: String, limitPaise: Long) -> Unit,
     onRepeatingStateChange: (id: String, state: RepeatingState) -> Unit,
+    onChartPaymentModeFilterChange: (PaymentModeFilter) -> Unit = {},
     onSetBudgetClick: () -> Unit = {},
     onTransactionClick: (com.example.data.local.TransactionEntity) -> Unit = {},
     topContentPadding: Dp = 8.dp,
@@ -113,7 +115,8 @@ fun ChartsAndInsightsScreen(
     }
 
     val rangeSpentPaise = displayedCategorySlices.sumOf { it.amountPaise }
-        .takeIf { it > 0L || activeCategoryFilter != null } ?: uiState.thisMonthSpentPaise
+        .takeIf { it > 0L || activeCategoryFilter != null || uiState.chartPaymentModeFilter != PaymentModeFilter.ALL }
+        ?: uiState.thisMonthSpentPaise
 
     val daysDivisor = when (uiState.chartDateRange) {
         DateRangeFilter.THIS_WEEK -> 7L
@@ -205,6 +208,15 @@ fun ChartsAndInsightsScreen(
                         testTag = "charts_category_dropdown"
                     )
                 }
+
+                // 3-Way Segmented Filter Pill: All | Online | Cash
+                SegmentedPillToggle(
+                    options = PaymentModeFilter.entries,
+                    selectedOption = uiState.chartPaymentModeFilter,
+                    labelProvider = { it.label },
+                    onOptionSelected = onChartPaymentModeFilterChange,
+                    optionTestTagProvider = { "charts_payment_mode_${it.name.lowercase()}" }
+                )
 
                 SegmentedPillToggle(
                     options = ChartsSubTab.entries,

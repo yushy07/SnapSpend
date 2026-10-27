@@ -196,6 +196,7 @@ class SnapSpendRepository(private val database: SnapSpendDatabase) {
 
                 val key = draft.duplicateKey
                 val resolvedCatId = resolveCategoryId(draft.category)
+                val normalizedMode = if (draft.paymentMode.equals("CASH", ignoreCase = true)) "CASH" else "ONLINE"
                 if (draft.resolutionMode == ResolutionMode.UPDATE_PENDING_TO_FINAL && draft.existingMatchId != null) {
                     val updatedEntity = TransactionEntity(
                         id = draft.existingMatchId,
@@ -211,7 +212,8 @@ class SnapSpendRepository(private val database: SnapSpendDatabase) {
                         status = draft.status,
                         note = draft.note,
                         source = draft.source,
-                        duplicateKey = key
+                        duplicateKey = key,
+                        paymentMode = normalizedMode
                     )
                     dao.updateTransaction(updatedEntity)
                     updatedPending++
@@ -229,7 +231,8 @@ class SnapSpendRepository(private val database: SnapSpendDatabase) {
                         status = draft.status,
                         note = draft.note,
                         source = draft.source,
-                        duplicateKey = key
+                        duplicateKey = key,
+                        paymentMode = normalizedMode
                     )
                     dao.insertTransaction(entity)
                     inserted++
@@ -375,6 +378,7 @@ class SnapSpendRepository(private val database: SnapSpendDatabase) {
                 put("source", tx.source.name)
                 put("duplicateKey", tx.duplicateKey)
                 put("deletedAtMillis", tx.deletedAtMillis ?: JSONObject.NULL)
+                put("paymentMode", tx.paymentMode)
             }
             txArray.put(obj)
         }
@@ -435,7 +439,7 @@ class SnapSpendRepository(private val database: SnapSpendDatabase) {
 
     suspend fun exportTransactionsCsv(): String {
         val sb = StringBuilder()
-        sb.appendLine("Date,Time,Merchant,Category,Type,Amount (Rupees),Amount (Paise),Status,Payment App,Reference Number,Source,Note")
+        sb.appendLine("Date,Time,Merchant,Category,Type,Amount (Rupees),Amount (Paise),Status,Payment App,Reference Number,Source,Note,Payment Mode")
         val dateFmt = SimpleDateFormat("yyyy-MM-dd", Locale.US)
         val timeFmt = SimpleDateFormat("HH:mm", Locale.US)
 
@@ -457,7 +461,8 @@ class SnapSpendRepository(private val database: SnapSpendDatabase) {
             sb.append(csvEscape(tx.paymentApp)).append(',')
             sb.append(csvEscape(tx.referenceNumber.orEmpty())).append(',')
             sb.append(csvEscape(tx.source.name)).append(',')
-            sb.appendLine(csvEscape(tx.note))
+            sb.append(csvEscape(tx.note)).append(',')
+            sb.appendLine(csvEscape(tx.paymentMode))
         }
         return sb.toString()
     }
@@ -559,6 +564,8 @@ class SnapSpendRepository(private val database: SnapSpendDatabase) {
             val sourceStr = cols.getOrNull(10)?.trim().orEmpty()
             val source = runCatching { TransactionSource.valueOf(sourceStr.uppercase(Locale.US)) }.getOrDefault(TransactionSource.IMPORT)
             val note = cols.getOrNull(11)?.trim().orEmpty()
+            val rawPaymentMode = cols.getOrNull(12)?.trim().orEmpty()
+            val paymentMode = if (rawPaymentMode.equals("CASH", ignoreCase = true)) "CASH" else "ONLINE"
 
             val dupKey = MoneyUtils.buildDuplicateKey(refRaw, timestamp, hasExplicitTime, amountPaise, merchant)
             val resolvedCatId = resolveCategoryId(category)
@@ -578,7 +585,8 @@ class SnapSpendRepository(private val database: SnapSpendDatabase) {
                     note = note,
                     createdAt = System.currentTimeMillis(),
                     source = source,
-                    duplicateKey = dupKey
+                    duplicateKey = dupKey,
+                    paymentMode = paymentMode
                 )
             )
         }
@@ -700,6 +708,12 @@ class SnapSpendRepository(private val database: SnapSpendDatabase) {
             } else {
                 o.optLong("deletedAtMillis", 0L).takeIf { it > 0L }
             }
+            val rawPaymentMode = if (!o.has("paymentMode") || o.isNull("paymentMode")) {
+                "ONLINE"
+            } else {
+                o.optString("paymentMode", "ONLINE")
+            }
+            val paymentMode = if (rawPaymentMode.equals("CASH", ignoreCase = true)) "CASH" else "ONLINE"
             TransactionEntity(
                 id = 0L,
                 timestamp = timestamp,
@@ -716,7 +730,8 @@ class SnapSpendRepository(private val database: SnapSpendDatabase) {
                 createdAt = o.optLong("createdAt", System.currentTimeMillis()),
                 source = runCatching { TransactionSource.valueOf(o.optString("source", "IMPORT")) }.getOrDefault(TransactionSource.IMPORT),
                 duplicateKey = dupKey,
-                deletedAtMillis = deletedAtMillis
+                deletedAtMillis = deletedAtMillis,
+                paymentMode = paymentMode
             )
         }
 

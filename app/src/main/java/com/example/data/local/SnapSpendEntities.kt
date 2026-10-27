@@ -94,7 +94,8 @@ data class TransactionEntity(
         amountPaise = amountPaise,
         merchant = merchant
     ),
-    val deletedAtMillis: Long? = null
+    val deletedAtMillis: Long? = null,
+    val paymentMode: String = "ONLINE"
 ) {
     /**
      * Secondary constructor supporting string-typed `type` ("expense"/"earning"/"transfer"),
@@ -135,7 +136,8 @@ data class TransactionEntity(
             amountPaise = amountInPaise,
             merchant = merchant
         ),
-        deletedAtMillis = null
+        deletedAtMillis = null,
+        paymentMode = "ONLINE"
     )
 
     /** Secondary constructor supporting `date` and `amount` in paise as `Long` with enum types. */
@@ -176,7 +178,8 @@ data class TransactionEntity(
         createdAt = createdAt,
         source = source,
         duplicateKey = duplicateKey,
-        deletedAtMillis = null
+        deletedAtMillis = null,
+        paymentMode = "ONLINE"
     )
 
     /** Alias for timestamp (epoch millis). */
@@ -245,7 +248,8 @@ data class TransactionEntity(
             transactionStatus = status,
             note = note,
             createdAt = createdAt,
-            deletedAtMillis = deletedAtMillis
+            deletedAtMillis = deletedAtMillis,
+            paymentMode = paymentMode
         )
     }
 }
@@ -277,7 +281,8 @@ data class TransactionUiPresentation(
     val transactionStatus: TransactionStatus,
     val note: String,
     val createdAt: Long,
-    val deletedAtMillis: Long? = null
+    val deletedAtMillis: Long? = null,
+    val paymentMode: String = "ONLINE"
 )
 
 /**

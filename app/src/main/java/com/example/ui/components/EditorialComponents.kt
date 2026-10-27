@@ -260,8 +260,8 @@ fun Editorial3DLayerBox(
 
 /**
  * Adaptive app background with 24dp dot-grid pattern (no radial vignette):
- * - Dark Mode: Deep ink (#12121A) with white dots at 8% opacity
- * - Light Mode: Warm cream (#F3EEE3) with black dots at 10% opacity
+ * - Dark Mode: Deep Charcoal-Slate (#181A1F) with white dots at 8% opacity
+ * - Light Mode: Warm Peach Cream (#F9E4D4) with subtle ink dots at 8% opacity
  */
 @Composable
 fun EditorialSquiggleBackground(
@@ -273,7 +273,7 @@ fun EditorialSquiggleBackground(
     val dotColor = if (colors.isDark) {
         Color(0xFFFFFFFF).copy(alpha = 0.08f)
     } else {
-        Color(0xFF000000).copy(alpha = 0.10f)
+        InkBlack.copy(alpha = 0.08f)
     }
 
     Box(
@@ -2035,7 +2035,7 @@ fun EditorialTransactionCard(
                         Spacer(modifier = Modifier.height(3.dp))
                         Row(
                             verticalAlignment = Alignment.CenterVertically,
-                            horizontalArrangement = Arrangement.spacedBy(6.dp)
+                            horizontalArrangement = Arrangement.spacedBy(5.dp)
                         ) {
                             // Solid category-color dot with black outline
                             Box(
@@ -2046,7 +2046,17 @@ fun EditorialTransactionCard(
                                     .border(1.2.dp, InkBlack, CircleShape)
                             )
                             Text(
-                                text = "${transaction.category} · ${MoneyUtils.formatShortDateTime(transaction.timestamp, transaction.hasExplicitTime)}",
+                                text = transaction.category,
+                                style = MaterialTheme.typography.bodySmall.copy(fontWeight = FontWeight.Bold),
+                                color = InkBlack.copy(alpha = 0.84f),
+                                maxLines = 1,
+                                overflow = TextOverflow.Ellipsis
+                            )
+                            if (transaction.paymentMode.equals("CASH", ignoreCase = true)) {
+                                CashModeBadge(modifier = Modifier.testTag("cash_badge_${transaction.id}"))
+                            }
+                            Text(
+                                text = "· ${MoneyUtils.formatShortDateTime(transaction.timestamp, transaction.hasExplicitTime)}",
                                 style = MaterialTheme.typography.bodySmall.copy(fontWeight = FontWeight.Bold),
                                 color = InkBlack.copy(alpha = 0.84f),
                                 maxLines = 1,
@@ -2084,6 +2094,34 @@ fun EditorialTransactionCard(
                 }
             }
         }
+    }
+}
+
+/**
+ * Chunky Sunny Yellow (#FFD23F) [CASH] pill badge with black border and black text
+ * displayed next to the category name on cash transactions.
+ */
+@Composable
+fun CashModeBadge(
+    modifier: Modifier = Modifier
+) {
+    Surface(
+        modifier = modifier,
+        shape = CircleShape,
+        color = SunnyYellow,
+        border = BorderStroke(1.3.dp, InkBlack)
+    ) {
+        Text(
+            text = "CASH",
+            modifier = Modifier.padding(horizontal = 7.dp, vertical = 1.5.dp),
+            style = MaterialTheme.typography.labelSmall.copy(
+                fontSize = 9.sp,
+                fontWeight = FontWeight.Black,
+                letterSpacing = 0.3.sp
+            ),
+            color = InkBlack,
+            maxLines = 1
+        )
     }
 }
 
