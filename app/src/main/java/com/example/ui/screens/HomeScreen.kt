@@ -1,6 +1,13 @@
 package com.example.ui.screens
 
+import androidx.compose.animation.core.FastOutSlowInEasing
+import androidx.compose.animation.core.RepeatMode
+import androidx.compose.animation.core.animateFloat
 import androidx.compose.animation.core.animateFloatAsState
+import androidx.compose.animation.core.infiniteRepeatable
+import androidx.compose.animation.core.rememberInfiniteTransition
+import androidx.compose.animation.core.tween
+import com.example.ui.ScanUiState
 import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.background
@@ -103,6 +110,7 @@ import com.example.ui.theme.LocalReducedMotion
 import com.example.ui.theme.MarkScreenEntrancePlayedEffect
 import com.example.ui.theme.Motion
 import com.example.ui.theme.PaleMintHero
+import com.example.ui.theme.PaleMintTint
 import com.example.ui.theme.PureWhite
 import com.example.ui.theme.SnapSpendThemeTokens
 import com.example.ui.theme.SunnyYellow
@@ -118,6 +126,8 @@ import kotlin.math.roundToInt
 @Composable
 fun HomeScreen(
     uiState: SnapSpendUiState,
+    scanState: ScanUiState = ScanUiState.Idle,
+    onRetryScan: () -> Unit = {},
     onPickImagesClick: () -> Unit,
     onPickPdfClick: () -> Unit,
     onAiQuickNoteClick: () -> Unit,
@@ -442,6 +452,16 @@ fun HomeScreen(
                         testTag = "home_earned_card"
                     )
                 }
+            }
+        }
+
+        if (scanState !is ScanUiState.Idle) {
+            item(key = "home_live_scan_progress_card") {
+                LiveScanProgressHomeCard(
+                    scanState = scanState,
+                    onRetryScan = onRetryScan,
+                    modifier = Modifier.staggeredScreenEntrance("home", 4)
+                )
             }
         }
 
@@ -1241,4 +1261,155 @@ private fun QuickRepeatsRowSection(
         }
     }
 }
+
+@Composable
+private fun LiveScanProgressHomeCard(
+    scanState: ScanUiState,
+    onRetryScan: () -> Unit,
+    modifier: Modifier = Modifier
+) {
+    if (scanState is ScanUiState.Idle) return
+
+    val infiniteTransition = rememberInfiniteTransition(label = "scan_pulse")
+    val pulseAlpha by infiniteTransition.animateFloat(
+        initialValue = 0.3f,
+        targetValue = 1f,
+        animationSpec = infiniteRepeatable(
+            animation = tween(800, easing = FastOutSlowInEasing),
+            repeatMode = RepeatMode.Reverse
+        ),
+        label = "pulse_alpha"
+    )
+
+    val (titleText, bodyText, cardColor, actionLabel) = when (scanState) {
+        is ScanUiState.Reading -> {
+            Quad(
+                "Gemini AI Scan in Progress",
+                scanState.statusText.ifBlank { "Reading amount, date & category..." },
+                PaleMintTint,
+                null
+            )
+        }
+        is ScanUiState.ReviewReady -> {
+            Quad(
+                "Scan ready!",
+                "Tap to review ${scanState.drafts.size} payment draft(s)",
+                SunnyYellow,
+                "TAP TO REVIEW"
+            )
+        }
+        is ScanUiState.Error -> {
+            Quad(
+                "Scan failed",
+                scanState.message.ifBlank { "Tap to retry without re-uploading." },
+                EditorialCoral,
+                "TAP TO RETRY"
+            )
+        }
+        is ScanUiState.Unreadable -> {
+            Quad(
+                "Unreadable document",
+                scanState.reason.ifBlank { "Tap to retry scanning." },
+                EditorialLavender,
+                "TAP TO RETRY"
+            )
+        }
+        else -> Quad("Scanning...", "Processing background task...", PaleMintTint, null)
+    }
+
+    Editorial3DLayerBox(
+        modifier = modifier.fillMaxWidth(),
+        shape = RoundedCornerShape(24.dp),
+        extrusionColor = InkBlack,
+        extrusionBorderColor = InkBlack,
+        depthX = 3.dp,
+        depthY = 5.dp
+    ) {
+        Surface(
+            onClick = {
+                if (scanState is ScanUiState.Error || scanState is ScanUiState.Unreadable) {
+                    onRetryScan()
+                }
+            },
+            modifier = Modifier
+                .fillMaxWidth()
+                .testTag("home_scan_progress_card"),
+            shape = RoundedCornerShape(24.dp),
+            color = cardColor,
+            contentColor = InkBlack,
+            border = BorderStroke(1.8.dp, InkBlack)
+        ) {
+            Row(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(18.dp),
+                horizontalArrangement = Arrangement.SpaceBetween,
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                Row(
+                    modifier = Modifier.weight(1f),
+                    horizontalArrangement = Arrangement.spacedBy(14.dp),
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    Box(
+                        modifier = Modifier
+                            .size(16.dp)
+                            .graphicsLayer {
+                                alpha = if (scanState is ScanUiState.Reading) pulseAlpha else 1f
+                            }
+                            .clip(CircleShape)
+                            .background(if (scanState is ScanUiState.ReviewReady) InkBlack else SunnyYellow)
+                            .border(1.5.dp, InkBlack, CircleShape)
+                    )
+                    Column {
+                        Text(
+                            text = titleText,
+                            style = CondensedCardTitleStyle.copy(fontSize = 18.sp),
+                            color = InkBlack
+                        )
+                        Spacer(modifier = Modifier.height(2.dp))
+                        Text(
+                            text = bodyText,
+                            style = MaterialTheme.typography.bodySmall.copy(fontWeight = FontWeight.SemiBold),
+                            color = InkBlack.copy(alpha = 0.85f),
+                            maxLines = 2,
+                            overflow = TextOverflow.Ellipsis
+                        )
+                    }
+                }
+
+                if (actionLabel != null) {
+                    Spacer(modifier = Modifier.width(8.dp))
+                    Surface(
+                        onClick = {
+                            if (scanState is ScanUiState.Error || scanState is ScanUiState.Unreadable) {
+                                onRetryScan()
+                            }
+                        },
+                        shape = CircleShape,
+                        color = InkBlack,
+                        contentColor = PureWhite,
+                        modifier = Modifier.height(36.dp)
+                    ) {
+                        Box(
+                            modifier = Modifier.padding(horizontal = 14.dp),
+                            contentAlignment = Alignment.Center
+                        ) {
+                            Text(
+                                text = actionLabel,
+                                style = MaterialTheme.typography.labelSmall.copy(
+                                    fontWeight = FontWeight.Black,
+                                    fontSize = 11.sp
+                                )
+                            )
+                        }
+                    }
+                }
+            }
+        }
+    }
+}
+
+data class Quad<A, B, C, D>(val first: A, val second: B, val third: C, val fourth: D)
+
 

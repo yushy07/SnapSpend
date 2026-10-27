@@ -42,6 +42,7 @@ import com.example.util.MoneyUtils
 import com.example.util.MonthEndEstimateResult
 import com.example.util.MonthEndMath
 import com.example.util.QuickRepeatChip
+import com.example.util.ScanNotificationHelper
 import com.example.util.ShareIntentHelper
 import com.example.util.SharedPayloadResult
 import kotlinx.coroutines.Dispatchers
@@ -637,6 +638,7 @@ class SnapSpendViewModel(application: Application) : AndroidViewModel(applicatio
             onFinished()
             return
         }
+        ScanNotificationHelper.postScanningProgressNotification(getApplication())
         viewModelScope.launch {
             try {
                 _scanState.value = ScanUiState.Reading(
@@ -665,6 +667,7 @@ class SnapSpendViewModel(application: Application) : AndroidViewModel(applicatio
      * through the real Gemini AI extraction pipeline so Yu can test AI scanning anytime.
      */
     fun scanSampleUpiScreenshotWithGemini(presetIndex: Int) {
+        ScanNotificationHelper.postScanningProgressNotification(getApplication())
         viewModelScope.launch {
             _scanState.value = ScanUiState.Reading(1, 1, "Reading sample UPI receipt with Gemini...")
             val categories = repository.getAllCategoriesOnce().map { it.name }
@@ -687,6 +690,7 @@ class SnapSpendViewModel(application: Application) : AndroidViewModel(applicatio
     fun processNaturalLanguageNoteWithGemini(userNote: String) {
         val cleaned = userNote.trim()
         if (cleaned.isEmpty()) return
+        ScanNotificationHelper.postScanningProgressNotification(getApplication())
         viewModelScope.launch {
             _scanState.value = ScanUiState.Reading(1, 1, "Turning your note into a payment draft...")
             val categories = repository.getAllCategoriesOnce()
@@ -709,6 +713,7 @@ class SnapSpendViewModel(application: Application) : AndroidViewModel(applicatio
     ) {
         val cleaned = userNote.trim()
         if (cleaned.isEmpty()) return
+        ScanNotificationHelper.postScanningProgressNotification(getApplication())
         viewModelScope.launch {
             _scanState.value = ScanUiState.Reading(1, 1, "Sorting your cash note with Gemini AI...")
             val categories = repository.getAllCategoriesOnce()
@@ -825,6 +830,12 @@ class SnapSpendViewModel(application: Application) : AndroidViewModel(applicatio
                 if (_queuedScans.value.isEmpty()) {
                     ShareIntentHelper.cleanupActiveShareTempFiles()
                 }
+                val first = sorted.firstOrNull()
+                if (first != null) {
+                    val merchant = first.merchant.ifBlank { "Merchant" }
+                    val amountText = MoneyUtils.formatPaise(first.amountPaise)
+                    ScanNotificationHelper.postScanSuccessNotification(getApplication(), merchant, amountText)
+                }
             }
             is ExtractionResult.UnreadableOrNoPayments -> {
                 _scanState.value = ScanUiState.Unreadable(
@@ -835,6 +846,7 @@ class SnapSpendViewModel(application: Application) : AndroidViewModel(applicatio
                     isSmartCashLog = isSmartCashLog,
                     defaultCashType = defaultCashType
                 )
+                ScanNotificationHelper.postScanErrorNotification(getApplication())
             }
             is ExtractionResult.Error -> {
                 _scanState.value = ScanUiState.Error(
@@ -845,6 +857,7 @@ class SnapSpendViewModel(application: Application) : AndroidViewModel(applicatio
                     isSmartCashLog = isSmartCashLog,
                     defaultCashType = defaultCashType
                 )
+                ScanNotificationHelper.postScanErrorNotification(getApplication())
             }
         }
     }

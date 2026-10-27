@@ -733,6 +733,8 @@ fun SnapSpendRootScreen(
                                 SnapSpendTab.HOME -> {
                                     HomeScreen(
                                         uiState = uiState,
+                                        scanState = scanState,
+                                        onRetryScan = viewModel::retryLastScan,
                                         onPickImagesClick = {
                                             performWithFirstScanNoticeCheck {
                                                 photoPickerLauncher.launch(

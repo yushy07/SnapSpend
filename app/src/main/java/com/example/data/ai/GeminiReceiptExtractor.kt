@@ -64,7 +64,7 @@ class GeminiReceiptExtractor(private val context: Context) {
 
     private suspend fun <T> retryWithExponentialBackoff(
         maxAttempts: Int = 3,
-        initialDelayMs: Long = 1000L,
+        initialDelayMs: Long = 2000L,
         block: suspend (attempt: Int) -> T
     ): T {
         var currentDelay = initialDelayMs
@@ -76,12 +76,21 @@ class GeminiReceiptExtractor(private val context: Context) {
                 if (e !is TimeoutCancellationException) throw e
                 lastException = e
             } catch (e: Exception) {
+                val msg = e.message ?: ""
+                val isHighDemand = msg.contains("503") || msg.contains("429") ||
+                        msg.contains("ResourceExhausted", ignoreCase = true) ||
+                        msg.contains("ServiceUnavailable", ignoreCase = true) ||
+                        msg.contains("busy", ignoreCase = true) ||
+                        msg.contains("too many requests", ignoreCase = true) ||
+                        msg.contains("overloaded", ignoreCase = true)
+
                 lastException = e
-            }
-            if (attempt < maxAttempts) {
-                Log.w(TAG, "Gemini call attempt $attempt failed, retrying in ${currentDelay}ms...", lastException)
-                delay(currentDelay)
-                currentDelay *= 2L
+                if (attempt < maxAttempts) {
+                    Log.w(TAG, "Gemini call attempt $attempt failed (high demand/error: $msg), retrying in ${currentDelay}ms...", e)
+                    delay(currentDelay)
+                    currentDelay *= 2L
+                    continue
+                }
             }
         }
         throw lastException ?: IllegalStateException("AI request failed after $maxAttempts attempts.")
@@ -336,7 +345,7 @@ class GeminiReceiptExtractor(private val context: Context) {
         }
 
         val model = Firebase.ai.generativeModel(
-            modelName = "gemini-3.8-flash",
+            modelName = "gemini-2.5-flash",
             generationConfig = config
         )
 
@@ -518,7 +527,7 @@ class GeminiReceiptExtractor(private val context: Context) {
         }
 
         val model = Firebase.ai.generativeModel(
-            modelName = "gemini-3.8-flash",
+            modelName = "gemini-2.5-flash",
             generationConfig = config
         )
 
