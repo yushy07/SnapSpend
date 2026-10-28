@@ -1,5 +1,6 @@
 package com.example.ui.screens
 
+import androidx.compose.animation.animateColorAsState
 import androidx.compose.animation.core.FastOutSlowInEasing
 import androidx.compose.animation.core.RepeatMode
 import androidx.compose.animation.core.animateFloat
@@ -7,6 +8,8 @@ import androidx.compose.animation.core.animateFloatAsState
 import androidx.compose.animation.core.infiniteRepeatable
 import androidx.compose.animation.core.rememberInfiniteTransition
 import androidx.compose.animation.core.tween
+import androidx.compose.foundation.interaction.MutableInteractionSource
+import androidx.compose.foundation.interaction.collectIsPressedAsState
 import com.example.ui.ScanUiState
 import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.ExperimentalFoundationApi
@@ -127,7 +130,12 @@ import kotlin.math.roundToInt
 fun HomeScreen(
     uiState: SnapSpendUiState,
     scanState: ScanUiState = ScanUiState.Idle,
+    activeScanState: com.example.ui.ScanProgressState? = null,
+    onOpenReviewDeck: () -> Unit = {},
     onRetryScan: () -> Unit = {},
+    onCancelScan: () -> Unit = {},
+    onDismissScan: () -> Unit = {},
+    onTapReview: () -> Unit = {},
     onPickImagesClick: () -> Unit,
     onPickPdfClick: () -> Unit,
     onAiQuickNoteClick: () -> Unit,
@@ -298,6 +306,20 @@ fun HomeScreen(
             }
         }
 
+        // Live Background Scan Progress Card (Neo-Brutalist 3D card positioned directly below Search Bar)
+        if (activeScanState != null) {
+            item(key = "home_active_background_scan_card") {
+                LiveBackgroundScanCard(
+                    scanState = activeScanState,
+                    onOpenReview = onOpenReviewDeck,
+                    onRetry = onRetryScan,
+                    onCancel = onCancelScan,
+                    onDismiss = onDismissScan,
+                    modifier = Modifier.staggeredScreenEntrance("home", 1)
+                )
+            }
+        }
+
         // Optional Queued Scans Retry Banner (AI Fallback mechanism)
         if (uiState.queuedScansCount > 0) {
             item(key = "home_queued_scans_banner") {
@@ -452,16 +474,6 @@ fun HomeScreen(
                         testTag = "home_earned_card"
                     )
                 }
-            }
-        }
-
-        if (scanState !is ScanUiState.Idle) {
-            item(key = "home_live_scan_progress_card") {
-                LiveScanProgressHomeCard(
-                    scanState = scanState,
-                    onRetryScan = onRetryScan,
-                    modifier = Modifier.staggeredScreenEntrance("home", 4)
-                )
             }
         }
 
@@ -1263,145 +1275,389 @@ private fun QuickRepeatsRowSection(
 }
 
 @Composable
-private fun LiveScanProgressHomeCard(
-    scanState: ScanUiState,
-    onRetryScan: () -> Unit,
+fun LiveBackgroundScanCard(
+    scanState: com.example.ui.ScanProgressState,
+    onOpenReview: () -> Unit,
+    onRetry: () -> Unit,
+    onCancel: () -> Unit,
+    onDismiss: () -> Unit,
     modifier: Modifier = Modifier
 ) {
-    if (scanState is ScanUiState.Idle) return
-
-    val infiniteTransition = rememberInfiniteTransition(label = "scan_pulse")
+    val view = LocalView.current
+    val reducedMotion = LocalReducedMotion.current
+    val infiniteTransition = rememberInfiniteTransition(label = "scan_card_fx")
     val pulseAlpha by infiniteTransition.animateFloat(
-        initialValue = 0.3f,
+        initialValue = 0.45f,
         targetValue = 1f,
         animationSpec = infiniteRepeatable(
-            animation = tween(800, easing = FastOutSlowInEasing),
+            animation = tween(700, easing = FastOutSlowInEasing),
             repeatMode = RepeatMode.Reverse
         ),
         label = "pulse_alpha"
     )
 
-    val (titleText, bodyText, cardColor, actionLabel) = when (scanState) {
-        is ScanUiState.Reading -> {
-            Quad(
-                "Gemini AI Scan in Progress",
-                scanState.statusText.ifBlank { "Reading amount, date & category..." },
-                PaleMintTint,
-                null
-            )
-        }
-        is ScanUiState.ReviewReady -> {
-            Quad(
-                "Scan ready!",
-                "Tap to review ${scanState.drafts.size} payment draft(s)",
-                SunnyYellow,
-                "TAP TO REVIEW"
-            )
-        }
-        is ScanUiState.Error -> {
-            Quad(
-                "Scan failed",
-                scanState.message.ifBlank { "Tap to retry without re-uploading." },
-                EditorialCoral,
-                "TAP TO RETRY"
-            )
-        }
-        is ScanUiState.Unreadable -> {
-            Quad(
-                "Unreadable document",
-                scanState.reason.ifBlank { "Tap to retry scanning." },
-                EditorialLavender,
-                "TAP TO RETRY"
-            )
-        }
-        else -> Quad("Scanning...", "Processing background task...", PaleMintTint, null)
+    val isScanning = scanState.currentStep in listOf(
+        com.example.ui.ScanStep.READING_FILE,
+        com.example.ui.ScanStep.PARSING_DETAILS,
+        com.example.ui.ScanStep.MATCHING_CATEGORY
+    )
+    val isComplete = scanState.currentStep == com.example.ui.ScanStep.COMPLETE
+    val isError = scanState.currentStep == com.example.ui.ScanStep.ERROR
+
+    val targetCardColor = when {
+        isComplete -> EditorialMint
+        isError -> EditorialCoral
+        else -> EditorialAqua
     }
+    val cardColor by animateColorAsState(
+        targetValue = targetCardColor,
+        animationSpec = Motion.normalTween(reducedMotion),
+        label = "scan_card_color"
+    )
+
+    val targetProgressFraction = when (scanState.currentStep) {
+        com.example.ui.ScanStep.READING_FILE -> 0.36f
+        com.example.ui.ScanStep.PARSING_DETAILS -> 0.68f
+        com.example.ui.ScanStep.MATCHING_CATEGORY -> 0.92f
+        com.example.ui.ScanStep.COMPLETE -> 1f
+        com.example.ui.ScanStep.ERROR -> 1f
+    }
+    val animatedProgressFraction by animateFloatAsState(
+        targetValue = targetProgressFraction,
+        animationSpec = Motion.physicalSpring(reducedMotion),
+        label = "scan_step_progress"
+    )
+
+    val reviewInteraction = remember { MutableInteractionSource() }
+    val isReviewPressed by reviewInteraction.collectIsPressedAsState()
+    val reviewScale by animateFloatAsState(
+        targetValue = if (isReviewPressed) 0.94f else 1f,
+        animationSpec = Motion.pressSpring(reducedMotion),
+        label = "review_btn_scale"
+    )
+
+    val retryInteraction = remember { MutableInteractionSource() }
+    val isRetryPressed by retryInteraction.collectIsPressedAsState()
+    val retryScale by animateFloatAsState(
+        targetValue = if (isRetryPressed) 0.94f else 1f,
+        animationSpec = Motion.pressSpring(reducedMotion),
+        label = "retry_btn_scale"
+    )
+
+    val dismissInteraction = remember { MutableInteractionSource() }
+    val isDismissPressed by dismissInteraction.collectIsPressedAsState()
+    val dismissScale by animateFloatAsState(
+        targetValue = if (isDismissPressed) 0.94f else 1f,
+        animationSpec = Motion.pressSpring(reducedMotion),
+        label = "dismiss_btn_scale"
+    )
+
+    val cancelInteraction = remember { MutableInteractionSource() }
+    val isCancelPressed by cancelInteraction.collectIsPressedAsState()
+    val cancelScale by animateFloatAsState(
+        targetValue = if (isCancelPressed) 0.90f else 1f,
+        animationSpec = Motion.pressSpring(reducedMotion),
+        label = "cancel_btn_scale"
+    )
 
     Editorial3DLayerBox(
-        modifier = modifier.fillMaxWidth(),
-        shape = RoundedCornerShape(24.dp),
+        modifier = modifier
+            .fillMaxWidth()
+            .testTag("home_active_scan_card"),
+        shape = RoundedCornerShape(20.dp),
         extrusionColor = InkBlack,
         extrusionBorderColor = InkBlack,
         depthX = 3.dp,
-        depthY = 5.dp
+        depthY = 3.dp
     ) {
         Surface(
             onClick = {
-                if (scanState is ScanUiState.Error || scanState is ScanUiState.Unreadable) {
-                    onRetryScan()
+                if (isComplete) {
+                    Motion.performLightTapHaptic(view)
+                    onOpenReview()
+                } else if (isError) {
+                    Motion.performLightTapHaptic(view)
+                    onRetry()
                 }
             },
-            modifier = Modifier
-                .fillMaxWidth()
-                .testTag("home_scan_progress_card"),
-            shape = RoundedCornerShape(24.dp),
+            modifier = Modifier.fillMaxWidth(),
+            shape = RoundedCornerShape(20.dp),
             color = cardColor,
             contentColor = InkBlack,
-            border = BorderStroke(1.8.dp, InkBlack)
+            border = BorderStroke(2.dp, InkBlack)
         ) {
-            Row(
+            Column(
                 modifier = Modifier
                     .fillMaxWidth()
-                    .padding(18.dp),
-                horizontalArrangement = Arrangement.SpaceBetween,
-                verticalAlignment = Alignment.CenterVertically
+                    .padding(horizontal = 16.dp, vertical = 14.dp)
             ) {
                 Row(
-                    modifier = Modifier.weight(1f),
-                    horizontalArrangement = Arrangement.spacedBy(14.dp),
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.SpaceBetween,
                     verticalAlignment = Alignment.CenterVertically
                 ) {
-                    Box(
-                        modifier = Modifier
-                            .size(16.dp)
-                            .graphicsLayer {
-                                alpha = if (scanState is ScanUiState.Reading) pulseAlpha else 1f
-                            }
-                            .clip(CircleShape)
-                            .background(if (scanState is ScanUiState.ReviewReady) InkBlack else SunnyYellow)
-                            .border(1.5.dp, InkBlack, CircleShape)
-                    )
-                    Column {
-                        Text(
-                            text = titleText,
-                            style = CondensedCardTitleStyle.copy(fontSize = 18.sp),
-                            color = InkBlack
-                        )
-                        Spacer(modifier = Modifier.height(2.dp))
-                        Text(
-                            text = bodyText,
-                            style = MaterialTheme.typography.bodySmall.copy(fontWeight = FontWeight.SemiBold),
-                            color = InkBlack.copy(alpha = 0.85f),
-                            maxLines = 2,
-                            overflow = TextOverflow.Ellipsis
-                        )
-                    }
-                }
-
-                if (actionLabel != null) {
-                    Spacer(modifier = Modifier.width(8.dp))
-                    Surface(
-                        onClick = {
-                            if (scanState is ScanUiState.Error || scanState is ScanUiState.Unreadable) {
-                                onRetryScan()
-                            }
-                        },
-                        shape = CircleShape,
-                        color = InkBlack,
-                        contentColor = PureWhite,
-                        modifier = Modifier.height(36.dp)
+                    Row(
+                        modifier = Modifier.weight(1f),
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.spacedBy(8.dp)
                     ) {
                         Box(
-                            modifier = Modifier.padding(horizontal = 14.dp),
-                            contentAlignment = Alignment.Center
+                            modifier = Modifier
+                                .size(12.dp)
+                                .graphicsLayer {
+                                    alpha = if (isScanning) pulseAlpha else 1f
+                                }
+                                .clip(CircleShape)
+                                .background(if (isComplete) InkBlack else if (isError) PureWhite else SunnyYellow)
+                                .border(1.5.dp, InkBlack, CircleShape)
+                        )
+                        Surface(
+                            shape = CircleShape,
+                            color = PureWhite,
+                            border = BorderStroke(1.5.dp, InkBlack)
                         ) {
                             Text(
-                                text = actionLabel,
+                                text = scanState.fileNameOrType,
                                 style = MaterialTheme.typography.labelSmall.copy(
                                     fontWeight = FontWeight.Black,
                                     fontSize = 11.sp
-                                )
+                                ),
+                                color = InkBlack,
+                                maxLines = 1,
+                                overflow = TextOverflow.Ellipsis,
+                                modifier = Modifier.padding(horizontal = 10.dp, vertical = 3.dp)
                             )
+                        }
+                        if (scanState.queuedCount > 0) {
+                            Surface(
+                                shape = CircleShape,
+                                color = SunnyYellow,
+                                border = BorderStroke(1.5.dp, InkBlack)
+                            ) {
+                                Text(
+                                    text = "+${scanState.queuedCount} QUEUED",
+                                    style = MaterialTheme.typography.labelSmall.copy(
+                                        fontWeight = FontWeight.Black,
+                                        fontSize = 10.sp
+                                    ),
+                                    color = InkBlack,
+                                    maxLines = 1,
+                                    modifier = Modifier.padding(horizontal = 8.dp, vertical = 3.dp)
+                                )
+                            }
+                        }
+                    }
+
+                    if (isScanning) {
+                        Surface(
+                            onClick = {
+                                Motion.performLightTapHaptic(view)
+                                onCancel()
+                            },
+                            interactionSource = cancelInteraction,
+                            shape = CircleShape,
+                            color = PureWhite,
+                            border = BorderStroke(1.5.dp, InkBlack),
+                            modifier = Modifier
+                                .size(32.dp)
+                                .graphicsLayer {
+                                    scaleX = cancelScale
+                                    scaleY = cancelScale
+                                }
+                                .testTag("home_scan_cancel_button")
+                        ) {
+                            Box(contentAlignment = Alignment.Center) {
+                                Icon(
+                                    imageVector = Icons.Default.Close,
+                                    contentDescription = "Cancel scan",
+                                    tint = InkBlack,
+                                    modifier = Modifier.size(16.dp)
+                                )
+                            }
+                        }
+                    } else if (isError) {
+                        Surface(
+                            onClick = {
+                                Motion.performLightTapHaptic(view)
+                                onDismiss()
+                            },
+                            interactionSource = cancelInteraction,
+                            shape = CircleShape,
+                            color = PureWhite,
+                            border = BorderStroke(1.5.dp, InkBlack),
+                            modifier = Modifier
+                                .size(32.dp)
+                                .graphicsLayer {
+                                    scaleX = cancelScale
+                                    scaleY = cancelScale
+                                }
+                                .testTag("home_scan_error_close_button")
+                        ) {
+                            Box(contentAlignment = Alignment.Center) {
+                                Icon(
+                                    imageVector = Icons.Default.Close,
+                                    contentDescription = "Dismiss error",
+                                    tint = InkBlack,
+                                    modifier = Modifier.size(16.dp)
+                                )
+                            }
+                        }
+                    }
+                }
+
+                Spacer(modifier = Modifier.height(10.dp))
+
+                when {
+                    isScanning -> {
+                        Text(
+                            text = scanState.stepDescription,
+                            style = CondensedCardTitleStyle.copy(fontSize = 17.sp),
+                            color = InkBlack
+                        )
+                        Spacer(modifier = Modifier.height(8.dp))
+                        Box(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .height(6.dp)
+                                .clip(RoundedCornerShape(3.dp))
+                                .background(InkBlack.copy(alpha = 0.15f))
+                        ) {
+                            Box(
+                                modifier = Modifier
+                                    .fillMaxWidth(animatedProgressFraction.coerceIn(0.15f, 1f))
+                                    .fillMaxHeight()
+                                    .graphicsLayer {
+                                        alpha = pulseAlpha
+                                    }
+                                    .clip(RoundedCornerShape(3.dp))
+                                    .background(InkBlack)
+                            )
+                        }
+                    }
+                    isComplete -> {
+                        Row(
+                            modifier = Modifier.fillMaxWidth(),
+                            horizontalArrangement = Arrangement.SpaceBetween,
+                            verticalAlignment = Alignment.CenterVertically
+                        ) {
+                            Column(modifier = Modifier.weight(1f)) {
+                                Text(
+                                    text = scanState.stepDescription,
+                                    style = CondensedCardTitleStyle.copy(fontSize = 17.sp),
+                                    color = InkBlack,
+                                    maxLines = 2,
+                                    overflow = TextOverflow.Ellipsis
+                                )
+                            }
+                            Spacer(modifier = Modifier.width(12.dp))
+                            Surface(
+                                onClick = {
+                                    Motion.performLightTapHaptic(view)
+                                    onOpenReview()
+                                },
+                                interactionSource = reviewInteraction,
+                                shape = CircleShape,
+                                color = InkBlack,
+                                contentColor = PureWhite,
+                                border = BorderStroke(1.5.dp, InkBlack),
+                                modifier = Modifier
+                                    .graphicsLayer {
+                                        scaleX = reviewScale
+                                        scaleY = reviewScale
+                                    }
+                                    .testTag("home_scan_review_now_button")
+                            ) {
+                                Text(
+                                    text = "REVIEW NOW",
+                                    style = MaterialTheme.typography.labelSmall.copy(
+                                        fontWeight = FontWeight.Black,
+                                        fontSize = 12.sp,
+                                        letterSpacing = 0.5.sp
+                                    ),
+                                    color = PureWhite,
+                                    modifier = Modifier.padding(horizontal = 14.dp, vertical = 8.dp)
+                                )
+                            }
+                        }
+                    }
+                    isError -> {
+                        Text(
+                            text = "Scan interrupted. File is safe.",
+                            style = CondensedCardTitleStyle.copy(fontSize = 17.sp),
+                            color = InkBlack
+                        )
+                        val err = scanState.errorMessage
+                        if (!err.isNullOrBlank()) {
+                            Spacer(modifier = Modifier.height(2.dp))
+                            Text(
+                                text = err,
+                                style = MaterialTheme.typography.bodySmall.copy(fontWeight = FontWeight.SemiBold),
+                                color = InkBlack.copy(alpha = 0.85f),
+                                maxLines = 2,
+                                overflow = TextOverflow.Ellipsis
+                            )
+                        }
+                        Spacer(modifier = Modifier.height(10.dp))
+                        Row(
+                            horizontalArrangement = Arrangement.spacedBy(8.dp),
+                            verticalAlignment = Alignment.CenterVertically
+                        ) {
+                            Surface(
+                                onClick = {
+                                    Motion.performLightTapHaptic(view)
+                                    onRetry()
+                                },
+                                interactionSource = retryInteraction,
+                                shape = CircleShape,
+                                color = InkBlack,
+                                contentColor = PureWhite,
+                                border = BorderStroke(1.5.dp, InkBlack),
+                                modifier = Modifier
+                                    .graphicsLayer {
+                                        scaleX = retryScale
+                                        scaleY = retryScale
+                                    }
+                                    .testTag("home_scan_retry_now_button")
+                            ) {
+                                Text(
+                                    text = "RETRY NOW",
+                                    style = MaterialTheme.typography.labelSmall.copy(
+                                        fontWeight = FontWeight.Black,
+                                        fontSize = 12.sp,
+                                        letterSpacing = 0.5.sp
+                                    ),
+                                    color = PureWhite,
+                                    modifier = Modifier.padding(horizontal = 16.dp, vertical = 8.dp)
+                                )
+                            }
+                            Surface(
+                                onClick = {
+                                    Motion.performLightTapHaptic(view)
+                                    onDismiss()
+                                },
+                                interactionSource = dismissInteraction,
+                                shape = CircleShape,
+                                color = PureWhite,
+                                contentColor = InkBlack,
+                                border = BorderStroke(1.5.dp, InkBlack),
+                                modifier = Modifier
+                                    .graphicsLayer {
+                                        scaleX = dismissScale
+                                        scaleY = dismissScale
+                                    }
+                                    .testTag("home_scan_dismiss_button")
+                            ) {
+                                Text(
+                                    text = "DISMISS",
+                                    style = MaterialTheme.typography.labelSmall.copy(
+                                        fontWeight = FontWeight.Black,
+                                        fontSize = 12.sp,
+                                        letterSpacing = 0.5.sp
+                                    ),
+                                    color = InkBlack,
+                                    modifier = Modifier.padding(horizontal = 14.dp, vertical = 8.dp)
+                                )
+                            }
                         }
                     }
                 }

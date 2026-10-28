@@ -1,6 +1,6 @@
 {
-  "summary":  "Implementation plan to fix Gemini AI model name from gemini-3.8-flash to gemini-2.5-flash in GeminiReceiptExtractor.kt to resolve the Connection hiccup error when scanning custom photos, PDFs, and notes.",
-  "updatedAt":  "2026-10-27T20:11:44.024122414Z",
+  "summary":  "Implementation plan for Smart Cash Mode & Cash Wallet, including Room database migration (MIGRATION_3_4 with paymentMode and isAtmWithdrawal), persistent DataStore Cash Wallet balance tracking with ATM double-counting prevention, <20ms 0-API Regex Quick Cash logger with instant save + Undo snackbar and Gemini 3.8-Flash text fallback, and Neo-Brutalist Home/Transaction/Review UI updates.",
+  "updatedAt":  "2026-10-28T11:29:08.536042947Z",
   "requestFeedback":  true,
   "userFacing":  true
 }

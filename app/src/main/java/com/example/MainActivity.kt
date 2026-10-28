@@ -225,10 +225,11 @@ class MainActivity : ComponentActivity() {
             window.isNavigationBarContrastEnforced = false
         }
 
-        // Clean up any stale temporary share files from a prior app session, then ingest launch share intent
+        // Clean up any stale temporary share files from a prior app session, then ingest launch share intent & notifications
         if (savedInstanceState == null) {
             ShareIntentHelper.cleanupAllShareCacheDir(this)
             handleIncomingShareIntent(intent)
+            handleNotificationActions(intent)
         }
 
         setContent {
@@ -305,6 +306,7 @@ class MainActivity : ComponentActivity() {
         super.onNewIntent(intent)
         setIntent(intent)
         handleIncomingShareIntent(intent)
+        handleNotificationActions(intent)
     }
 
     private fun handleIncomingShareIntent(intent: Intent?) {
@@ -312,6 +314,18 @@ class MainActivity : ComponentActivity() {
         viewModel.onIncomingShareIntent(this, intent)
         // Clear share action on the stored activity intent so config changes do not re-trigger it
         intent.action = Intent.ACTION_MAIN
+    }
+
+    private fun handleNotificationActions(intent: Intent?) {
+        if (intent == null) return
+        if (intent.getBooleanExtra("ACTION_OPEN_REVIEW_DECK", false)) {
+            viewModel.openReviewDeck()
+            intent.removeExtra("ACTION_OPEN_REVIEW_DECK")
+        }
+        if (intent.getBooleanExtra("ACTION_RETRY_SCAN", false)) {
+            viewModel.retryActiveScan()
+            intent.removeExtra("ACTION_RETRY_SCAN")
+        }
     }
 }
 
@@ -329,6 +343,7 @@ fun SnapSpendRootScreen(
 
     val uiState by viewModel.uiState.collectAsStateWithLifecycle()
     val scanState by viewModel.scanState.collectAsStateWithLifecycle()
+    val activeScanState by viewModel.activeScanState.collectAsStateWithLifecycle()
     val backupState by viewModel.backupState.collectAsStateWithLifecycle()
     val isBackupBusy by viewModel.isBackupBusy.collectAsStateWithLifecycle()
     val restoreOffer by viewModel.restoreOffer.collectAsStateWithLifecycle()
@@ -734,7 +749,12 @@ fun SnapSpendRootScreen(
                                     HomeScreen(
                                         uiState = uiState,
                                         scanState = scanState,
-                                        onRetryScan = viewModel::retryLastScan,
+                                        activeScanState = activeScanState,
+                                        onOpenReviewDeck = viewModel::openReviewDeck,
+                                        onRetryScan = viewModel::retryActiveScan,
+                                        onCancelScan = viewModel::cancelActiveScan,
+                                        onDismissScan = viewModel::dismissActiveScan,
+                                        onTapReview = viewModel::openReviewDeck,
                                         onPickImagesClick = {
                                             performWithFirstScanNoticeCheck {
                                                 photoPickerLauncher.launch(

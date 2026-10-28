@@ -130,6 +130,7 @@ dependencies {
   implementation(libs.googleid)
   implementation("com.google.android.gms:play-services-auth:21.3.0")
   implementation("org.jetbrains.kotlinx:kotlinx-coroutines-play-services:1.10.2")
+  implementation("com.google.mlkit:text-recognition:16.0.1")
   implementation(libs.firebase.appcheck.recaptcha)
   implementation(libs.firebase.appcheck.debug)
   implementation(libs.kotlinx.coroutines.android)

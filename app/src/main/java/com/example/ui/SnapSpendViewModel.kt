@@ -37,6 +37,7 @@ import com.example.data.rules.TopMerchantItem
 import com.example.ui.screens.DataCheckMonthRow
 import com.example.ui.screens.DataCheckSnapshot
 import com.example.ui.screens.computeDataCheckMonthBounds
+import android.provider.OpenableColumns
 import com.example.ui.theme.ThemeMode
 import com.example.util.MoneyUtils
 import com.example.util.MonthEndEstimateResult
@@ -45,7 +46,9 @@ import com.example.util.QuickRepeatChip
 import com.example.util.ScanNotificationHelper
 import com.example.util.ShareIntentHelper
 import com.example.util.SharedPayloadResult
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.Job
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.SharingStarted
@@ -80,6 +83,17 @@ data class QueuedScanTask(
     val isSmartCashLog: Boolean = false,
     val defaultCashType: TransactionType? = null,
     val queuedAtMillis: Long = System.currentTimeMillis()
+)
+
+data class PendingBackgroundScanJob(
+    val id: String = java.util.UUID.randomUUID().toString(),
+    val fileNameOrType: String,
+    val uris: List<Uri> = emptyList(),
+    val samplePreset: Int? = null,
+    val naturalLanguageNote: String? = null,
+    val isSmartCashLog: Boolean = false,
+    val defaultCashType: TransactionType? = null,
+    val onCleanup: (() -> Unit)? = null
 )
 
 sealed interface ScanUiState {
@@ -204,6 +218,12 @@ class SnapSpendViewModel(application: Application) : AndroidViewModel(applicatio
 
     private val _scanState = MutableStateFlow<ScanUiState>(ScanUiState.Idle)
     val scanState: StateFlow<ScanUiState> = _scanState.asStateFlow()
+
+    private var activeScanJob: Job? = null
+    private val sequentialScanQueue = ArrayDeque<PendingBackgroundScanJob>()
+    private val accumulatedReviewDrafts = mutableListOf<DraftTransaction>()
+    private val _activeScanState = MutableStateFlow<com.example.ui.ScanProgressState?>(null)
+    val activeScanState: StateFlow<com.example.ui.ScanProgressState?> = _activeScanState.asStateFlow()
 
     private val _backupState = MutableStateFlow(backupManager.getBackupState())
     val backupState: StateFlow<BackupStateSnapshot> = _backupState.asStateFlow()
@@ -633,155 +653,344 @@ class SnapSpendViewModel(application: Application) : AndroidViewModel(applicatio
     }
 
     // --- AI Camera, Screenshot & PDF Extraction Flow ---
+    private fun resolveFileName(context: Context, uri: Uri?): String {
+        if (uri == null) return "Receipt_Document.jpg"
+        var name: String? = null
+        try {
+            context.contentResolver.query(uri, null, null, null, null)?.use { cursor ->
+                val nameIndex = cursor.getColumnIndex(OpenableColumns.DISPLAY_NAME)
+                if (nameIndex != -1 && cursor.moveToFirst()) {
+                    name = cursor.getString(nameIndex)
+                }
+            }
+        } catch (_: Exception) { }
+        if (name.isNullOrBlank()) {
+            val last = uri.lastPathSegment
+            if (!last.isNullOrBlank()) {
+                name = last.substringAfterLast('/')
+            }
+        }
+        return if (!name.isNullOrBlank()) name!! else "Receipt_Scan.jpg"
+    }
+
     fun processSelectedUris(uris: List<Uri>, onFinished: () -> Unit = {}) {
         if (uris.isEmpty()) {
             onFinished()
             return
         }
-        ScanNotificationHelper.postScanningProgressNotification(getApplication())
-        viewModelScope.launch {
-            try {
-                _scanState.value = ScanUiState.Reading(
-                    1,
-                    uris.size,
-                    "Gemini is parsing amount, date & category..."
-                )
-                val categories = repository.getAllCategoriesOnce()
-                val result = aiExtractor.extractFromUris(
-                    uris = uris,
-                    categories = categories,
-                    onProgress = { step, total, label ->
-                        _scanState.value = ScanUiState.Reading(step, total, label)
-                    }
-                )
-                handleExtractionResult(result, lastUris = uris, lastSamplePreset = null)
-            } finally {
-                onFinished()
-            }
+        val fileName = if (uris.size > 1) {
+            "${uris.size}_Receipts.jpg"
+        } else {
+            resolveFileName(getApplication(), uris.firstOrNull())
         }
-    }
-
-
-    /**
-     * Generates a realistic sample UPI & itemized receipt screenshot bitmap on-device and sends it
-     * through the real Gemini AI extraction pipeline so Yu can test AI scanning anytime.
-     */
-    fun scanSampleUpiScreenshotWithGemini(presetIndex: Int) {
-        ScanNotificationHelper.postScanningProgressNotification(getApplication())
-        viewModelScope.launch {
-            _scanState.value = ScanUiState.Reading(1, 1, "Reading sample UPI receipt with Gemini...")
-            val categories = repository.getAllCategoriesOnce().map { it.name }
-            val bitmap = withContext(Dispatchers.Default) {
-                aiExtractor.createSampleUpiScreenshotBitmap(presetIndex)
-            }
-            val result = aiExtractor.analyzeBitmapWithGemini(
-                bitmap = bitmap,
-                allowedCategories = categories,
-                source = TransactionSource.SCREENSHOT
+        enqueueSequentialScanJob(
+            PendingBackgroundScanJob(
+                fileNameOrType = fileName,
+                uris = uris,
+                onCleanup = onFinished
             )
-            handleExtractionResult(result, lastUris = emptyList(), lastSamplePreset = presetIndex, lastNote = null)
-        }
+        )
     }
 
-    /**
-     * Parses a single natural-language text or voice note into structured payment drafts
-     * using Gemini (`gemini-4-argon`). Stored database history is never sent.
-     */
+    fun scanSampleUpiScreenshotWithGemini(presetIndex: Int) {
+        val fileName = "Sample_UPI_Receipt_$presetIndex.jpg"
+        enqueueSequentialScanJob(
+            PendingBackgroundScanJob(
+                fileNameOrType = fileName,
+                samplePreset = presetIndex
+            )
+        )
+    }
+
     fun processNaturalLanguageNoteWithGemini(userNote: String) {
         val cleaned = userNote.trim()
         if (cleaned.isEmpty()) return
-        ScanNotificationHelper.postScanningProgressNotification(getApplication())
-        viewModelScope.launch {
-            _scanState.value = ScanUiState.Reading(1, 1, "Turning your note into a payment draft...")
-            val categories = repository.getAllCategoriesOnce()
-            val result = aiExtractor.extractFromNaturalLanguageText(
-                userInput = cleaned,
-                categories = categories
+        enqueueSequentialScanJob(
+            PendingBackgroundScanJob(
+                fileNameOrType = "Payment_Note.txt",
+                naturalLanguageNote = cleaned
             )
-            handleExtractionResult(result, lastUris = emptyList(), lastSamplePreset = null, lastNote = cleaned)
-        }
+        )
     }
 
-    /**
-     * Parses a rough Smart Cash Log note (e.g. "40 momos, 60 auto" or "got 500 cash from friend")
-     * using `gemini-3.8-flash` (plus local Merchant Memory rules), splitting multi-item notes into
-     * separate review drafts pre-tagged with `paymentMode = "CASH"`.
-     */
     fun processSmartCashLogWithGemini(
         userNote: String,
         defaultCashType: TransactionType = TransactionType.EXPENSE
     ) {
         val cleaned = userNote.trim()
         if (cleaned.isEmpty()) return
-        ScanNotificationHelper.postScanningProgressNotification(getApplication())
-        viewModelScope.launch {
-            _scanState.value = ScanUiState.Reading(1, 1, "Sorting your cash note with Gemini AI...")
-            val categories = repository.getAllCategoriesOnce()
-            val result = aiExtractor.extractFromNaturalLanguageText(
-                userInput = cleaned,
-                categories = categories,
-                defaultPaymentMode = "CASH",
-                defaultCashType = defaultCashType
-            )
-            handleExtractionResult(
-                result = result,
-                lastUris = emptyList(),
-                lastSamplePreset = null,
-                lastNote = cleaned,
+        enqueueSequentialScanJob(
+            PendingBackgroundScanJob(
+                fileNameOrType = "Cash_Expense_Note.txt",
+                naturalLanguageNote = cleaned,
                 isSmartCashLog = true,
                 defaultCashType = defaultCashType
             )
+        )
+    }
+
+    private fun enqueueSequentialScanJob(job: PendingBackgroundScanJob, addToFront: Boolean = false) {
+        val currentActive = _activeScanState.value
+        synchronized(accumulatedReviewDrafts) {
+            if (currentActive?.currentStep == com.example.ui.ScanStep.COMPLETE &&
+                !currentActive.resultDrafts.isNullOrEmpty() &&
+                accumulatedReviewDrafts.isEmpty()
+            ) {
+                accumulatedReviewDrafts.addAll(currentActive.resultDrafts)
+            }
+        }
+
+        val queueSizeAfterAdd = synchronized(sequentialScanQueue) {
+            if (addToFront) {
+                sequentialScanQueue.addFirst(job)
+            } else {
+                sequentialScanQueue.addLast(job)
+            }
+            sequentialScanQueue.size
+        }
+
+        if (activeScanJob?.isActive == true) {
+            _activeScanState.value = _activeScanState.value?.copy(
+                queuedCount = queueSizeAfterAdd
+            )
+            return
+        }
+
+        startSequentialQueueWorker()
+    }
+
+    private fun startSequentialQueueWorker() {
+        activeScanJob = viewModelScope.launch(Dispatchers.IO) {
+            while (true) {
+                val currentJob = synchronized(sequentialScanQueue) {
+                    if (sequentialScanQueue.isEmpty()) null else sequentialScanQueue.removeFirst()
+                } ?: break
+
+                val remainingInQueue = synchronized(sequentialScanQueue) { sequentialScanQueue.size }
+                val existingDraftsSnapshot = synchronized(accumulatedReviewDrafts) {
+                    accumulatedReviewDrafts.toList().takeIf { it.isNotEmpty() }
+                }
+
+                _activeScanState.value = com.example.ui.ScanProgressState(
+                    id = currentJob.id,
+                    fileNameOrType = currentJob.fileNameOrType,
+                    currentStep = com.example.ui.ScanStep.READING_FILE,
+                    stepDescription = "Reading receipt...",
+                    resultDrafts = existingDraftsSnapshot,
+                    queuedCount = remainingInQueue,
+                    recoverableUris = currentJob.uris,
+                    recoverableSamplePreset = currentJob.samplePreset,
+                    recoverableNote = currentJob.naturalLanguageNote,
+                    isSmartCashLog = currentJob.isSmartCashLog,
+                    defaultCashType = currentJob.defaultCashType
+                )
+                ScanNotificationHelper.postScanningProgressNotification(
+                    getApplication(),
+                    "Reading amount..."
+                )
+
+                val result = try {
+                    executeSingleBackgroundJob(currentJob)
+                } catch (e: CancellationException) {
+                    currentJob.onCleanup?.invoke()
+                    throw e
+                } catch (e: Exception) {
+                    ExtractionResult.Error(e.message ?: "Extraction failed")
+                }
+
+                if (result is ExtractionResult.Success) {
+                    currentJob.onCleanup?.invoke()
+                }
+
+                val shouldStopLoop = handleBackgroundExtractionResult(
+                    result = result,
+                    lastUris = currentJob.uris,
+                    lastSamplePreset = currentJob.samplePreset,
+                    lastNote = currentJob.naturalLanguageNote,
+                    isSmartCashLog = currentJob.isSmartCashLog,
+                    defaultCashType = currentJob.defaultCashType
+                )
+                if (shouldStopLoop) {
+                    break
+                }
+            }
         }
     }
 
-    fun retryLastScan() {
-        when (val current = _scanState.value) {
-            is ScanUiState.Error -> {
-                if (current.recoverableUris.isNotEmpty()) {
-                    processSelectedUris(current.recoverableUris)
-                } else if (current.recoverableSamplePreset != null) {
-                    scanSampleUpiScreenshotWithGemini(current.recoverableSamplePreset)
-                } else if (!current.recoverableNaturalLanguageNote.isNullOrBlank()) {
-                    if (current.isSmartCashLog) {
-                        processSmartCashLogWithGemini(
-                            current.recoverableNaturalLanguageNote,
-                            current.defaultCashType ?: TransactionType.EXPENSE
+    private suspend fun executeSingleBackgroundJob(job: PendingBackgroundScanJob): ExtractionResult {
+        return when {
+            job.uris.isNotEmpty() -> {
+                val categories = repository.getAllCategoriesOnce()
+                val memories = repository.getAllMerchantMemoriesOnce()
+                aiExtractor.extractFromUris(
+                    uris = job.uris,
+                    categories = categories,
+                    merchantMemories = memories,
+                    onProgress = { _, _, label ->
+                        val (nextStep, friendlyStepText) = when {
+                            label.contains("Categorising", ignoreCase = true) ||
+                                label.contains("Matching", ignoreCase = true) ->
+                                com.example.ui.ScanStep.MATCHING_CATEGORY to "Matching category..."
+                            label.contains("Filtering", ignoreCase = true) ||
+                                label.contains("Enhancing", ignoreCase = true) ||
+                                label.contains("Finding", ignoreCase = true) ->
+                                com.example.ui.ScanStep.PARSING_DETAILS to "Extracting amount & date..."
+                            else ->
+                                com.example.ui.ScanStep.READING_FILE to "Reading amount..."
+                        }
+                        val remaining = synchronized(sequentialScanQueue) { sequentialScanQueue.size }
+                        _activeScanState.value = _activeScanState.value?.copy(
+                            currentStep = nextStep,
+                            stepDescription = friendlyStepText,
+                            queuedCount = remaining
                         )
-                    } else {
-                        processNaturalLanguageNoteWithGemini(current.recoverableNaturalLanguageNote)
-                    }
-                }
-            }
-            is ScanUiState.Unreadable -> {
-                if (current.lastUris.isNotEmpty()) {
-                    processSelectedUris(current.lastUris)
-                } else if (current.lastSamplePreset != null) {
-                    scanSampleUpiScreenshotWithGemini(current.lastSamplePreset)
-                } else if (!current.lastNaturalLanguageNote.isNullOrBlank()) {
-                    if (current.isSmartCashLog) {
-                        processSmartCashLogWithGemini(
-                            current.lastNaturalLanguageNote,
-                            current.defaultCashType ?: TransactionType.EXPENSE
+                        ScanNotificationHelper.postScanningProgressNotification(
+                            getApplication(),
+                            friendlyStepText
                         )
-                    } else {
-                        processNaturalLanguageNoteWithGemini(current.lastNaturalLanguageNote)
                     }
-                }
+                )
             }
-            else -> Unit
+            job.samplePreset != null -> {
+                _activeScanState.value = _activeScanState.value?.copy(
+                    currentStep = com.example.ui.ScanStep.READING_FILE,
+                    stepDescription = "Reading amount..."
+                )
+                val categories = repository.getAllCategoriesOnce().map { it.name }
+                val bitmap = withContext(Dispatchers.Default) {
+                    aiExtractor.createSampleUpiScreenshotBitmap(job.samplePreset)
+                }
+                _activeScanState.value = _activeScanState.value?.copy(
+                    currentStep = com.example.ui.ScanStep.PARSING_DETAILS,
+                    stepDescription = "Finding date..."
+                )
+                val res = aiExtractor.analyzeBitmapWithGemini(
+                    bitmap = bitmap,
+                    allowedCategories = categories,
+                    source = TransactionSource.SCREENSHOT
+                )
+                _activeScanState.value = _activeScanState.value?.copy(
+                    currentStep = com.example.ui.ScanStep.MATCHING_CATEGORY,
+                    stepDescription = "Matching category..."
+                )
+                res
+            }
+            !job.naturalLanguageNote.isNullOrBlank() -> {
+                _activeScanState.value = _activeScanState.value?.copy(
+                    currentStep = com.example.ui.ScanStep.PARSING_DETAILS,
+                    stepDescription = "Extracting amount & date..."
+                )
+                val categories = repository.getAllCategoriesOnce()
+                val res = if (job.isSmartCashLog) {
+                    aiExtractor.extractFromNaturalLanguageText(
+                        userInput = job.naturalLanguageNote,
+                        categories = categories,
+                        defaultPaymentMode = "CASH",
+                        defaultCashType = job.defaultCashType ?: TransactionType.EXPENSE
+                    )
+                } else {
+                    aiExtractor.extractFromNaturalLanguageText(
+                        userInput = job.naturalLanguageNote,
+                        categories = categories
+                    )
+                }
+                _activeScanState.value = _activeScanState.value?.copy(
+                    currentStep = com.example.ui.ScanStep.MATCHING_CATEGORY,
+                    stepDescription = "Matching category..."
+                )
+                res
+            }
+            else -> ExtractionResult.Error("No input provided for scan.")
         }
     }
 
-    fun queueCurrentFailedScan() {
-        val current = _scanState.value as? ScanUiState.Error ?: return
-        val task = QueuedScanTask(
+    fun openReviewDeck() {
+        val current = _activeScanState.value ?: return
+        val drafts = current.resultDrafts
+        if (!drafts.isNullOrEmpty()) {
+            _scanState.value = ScanUiState.ReviewReady(drafts)
+        }
+    }
+
+    fun cancelActiveScan() {
+        activeScanJob?.cancel()
+        activeScanJob = null
+        synchronized(sequentialScanQueue) {
+            sequentialScanQueue.forEach { it.onCleanup?.invoke() }
+            sequentialScanQueue.clear()
+        }
+        synchronized(accumulatedReviewDrafts) {
+            accumulatedReviewDrafts.clear()
+        }
+        _activeScanState.value = null
+        _scanState.value = ScanUiState.Idle
+        ScanNotificationHelper.cancelScanNotification(getApplication())
+    }
+
+    fun dismissActiveScan() {
+        val hasMoreQueued = synchronized(sequentialScanQueue) { sequentialScanQueue.isNotEmpty() }
+        if (hasMoreQueued && activeScanJob?.isActive != true) {
+            startSequentialQueueWorker()
+            return
+        }
+        val existingDrafts = synchronized(accumulatedReviewDrafts) { accumulatedReviewDrafts.toList() }
+        if (existingDrafts.isNotEmpty() && _activeScanState.value?.currentStep == com.example.ui.ScanStep.ERROR) {
+            // Transition back to COMPLETE for previously succeeded drafts in the batch
+            val first = existingDrafts.first()
+            val count = existingDrafts.size
+            val merchant = first.merchant.ifBlank { "Merchant" }
+            val amountFormatted = MoneyUtils.formatPaise(first.amountPaise)
+            val summaryDescription = if (count > 1) {
+                "Scan Complete! $merchant / $amountFormatted (+${count - 1} more) ready to review"
+            } else {
+                "Scan Complete! $merchant / $amountFormatted ready to review"
+            }
+            _activeScanState.value = _activeScanState.value?.copy(
+                currentStep = com.example.ui.ScanStep.COMPLETE,
+                stepDescription = summaryDescription,
+                resultDrafts = existingDrafts,
+                errorMessage = null,
+                queuedCount = 0
+            )
+            ScanNotificationHelper.postScanSuccessNotification(getApplication(), merchant, amountFormatted, count)
+            return
+        }
+        synchronized(accumulatedReviewDrafts) {
+            accumulatedReviewDrafts.clear()
+        }
+        _activeScanState.value = null
+        ScanNotificationHelper.cancelScanNotification(getApplication())
+    }
+
+    fun retryActiveScan() {
+        val current = _activeScanState.value ?: return
+        val retryJob = PendingBackgroundScanJob(
+            id = current.id,
+            fileNameOrType = current.fileNameOrType,
             uris = current.recoverableUris,
             samplePreset = current.recoverableSamplePreset,
-            naturalLanguageNote = current.recoverableNaturalLanguageNote,
+            naturalLanguageNote = current.recoverableNote,
             isSmartCashLog = current.isSmartCashLog,
             defaultCashType = current.defaultCashType
         )
+        enqueueSequentialScanJob(retryJob, addToFront = true)
+    }
+
+    fun retryLastScan() {
+        retryActiveScan()
+    }
+
+    fun queueCurrentFailedScan() {
+        val current = _activeScanState.value
+        val task = QueuedScanTask(
+            uris = current?.recoverableUris ?: emptyList(),
+            samplePreset = current?.recoverableSamplePreset,
+            naturalLanguageNote = current?.recoverableNote,
+            isSmartCashLog = current?.isSmartCashLog ?: false,
+            defaultCashType = current?.defaultCashType
+        )
         _queuedScans.value = _queuedScans.value + task
+        dismissActiveScan()
         _scanState.value = ScanUiState.Idle
         _toastMessage.value = "Scan queued! Tap 'Retry queued scans' on Home whenever you're back online."
     }
@@ -805,59 +1014,117 @@ class SnapSpendViewModel(application: Application) : AndroidViewModel(applicatio
         }
     }
 
-    private suspend fun handleExtractionResult(
+    private suspend fun handleBackgroundExtractionResult(
         result: ExtractionResult,
         lastUris: List<Uri>,
         lastSamplePreset: Int?,
         lastNote: String? = null,
         isSmartCashLog: Boolean = false,
         defaultCashType: TransactionType? = null
-    ) {
-        when (result) {
+    ): Boolean {
+        return when (result) {
             is ExtractionResult.Success -> {
                 val existingTxs = repository.getAllTransactionsOnce()
                 val memories = repository.getAllMerchantMemoriesOnce().associateBy { it.normalizedMerchant }
                 val enriched = result.drafts.map { raw ->
                     LocalInsightsAndRulesEngine.enrichAndResolveDraft(raw, existingTxs, memories)
                 }
-                // Highlight low-confidence items first on the review screen so Yu checks them first
-                val sorted = enriched.sortedWith(
-                    compareByDescending<DraftTransaction> { it.isLowConfidence }
-                        .thenBy { it.isSkipped }
-                        .thenByDescending { it.timestamp }
-                )
-                _scanState.value = ScanUiState.ReviewReady(sorted)
-                if (_queuedScans.value.isEmpty()) {
-                    ShareIntentHelper.cleanupActiveShareTempFiles()
+
+                val combinedSorted = synchronized(accumulatedReviewDrafts) {
+                    val existingIds = accumulatedReviewDrafts.map { it.draftId }.toSet()
+                    enriched.forEach { d ->
+                        if (d.draftId !in existingIds) {
+                            accumulatedReviewDrafts.add(d)
+                        }
+                    }
+                    accumulatedReviewDrafts.sortedWith(
+                        compareByDescending<DraftTransaction> { it.isLowConfidence }
+                            .thenBy { it.isSkipped }
+                            .thenByDescending { it.timestamp }
+                    ).also { sortedList ->
+                        accumulatedReviewDrafts.clear()
+                        accumulatedReviewDrafts.addAll(sortedList)
+                    }
                 }
-                val first = sorted.firstOrNull()
-                if (first != null) {
-                    val merchant = first.merchant.ifBlank { "Merchant" }
-                    val amountText = MoneyUtils.formatPaise(first.amountPaise)
-                    ScanNotificationHelper.postScanSuccessNotification(getApplication(), merchant, amountText)
+
+                // If the review deck is currently open, live-update it with the newly combined drafts
+                if (_scanState.value is ScanUiState.ReviewReady) {
+                    _scanState.value = ScanUiState.ReviewReady(combinedSorted)
+                }
+
+                val remainingQueued = synchronized(sequentialScanQueue) { sequentialScanQueue.size }
+                if (remainingQueued > 0) {
+                    // Continue sequential loop to process the next queued scan and combine its drafts
+                    false
+                } else {
+                    val first = combinedSorted.firstOrNull()
+                    val count = combinedSorted.size
+                    val merchant = first?.merchant?.ifBlank { "Merchant" } ?: "Merchant"
+                    val amountFormatted = first?.let { MoneyUtils.formatPaise(it.amountPaise) } ?: "₹0"
+                    val summaryDescription = if (count > 1) {
+                        "Scan Complete! $merchant / $amountFormatted (+${count - 1} more) ready to review"
+                    } else {
+                        "Scan Complete! $merchant / $amountFormatted ready to review"
+                    }
+
+                    _activeScanState.value = _activeScanState.value?.copy(
+                        currentStep = com.example.ui.ScanStep.COMPLETE,
+                        stepDescription = summaryDescription,
+                        resultDrafts = combinedSorted,
+                        errorMessage = null,
+                        queuedCount = 0
+                    )
+                    if (_queuedScans.value.isEmpty()) {
+                        ShareIntentHelper.cleanupActiveShareTempFiles()
+                    }
+                    ScanNotificationHelper.postScanSuccessNotification(
+                        getApplication(),
+                        merchant,
+                        amountFormatted,
+                        count
+                    )
+                    false
                 }
             }
             is ExtractionResult.UnreadableOrNoPayments -> {
-                _scanState.value = ScanUiState.Unreadable(
-                    reason = result.reason,
-                    lastUris = lastUris,
-                    lastSamplePreset = lastSamplePreset,
-                    lastNaturalLanguageNote = lastNote,
-                    isSmartCashLog = isSmartCashLog,
-                    defaultCashType = defaultCashType
-                )
-                ScanNotificationHelper.postScanErrorNotification(getApplication())
-            }
-            is ExtractionResult.Error -> {
-                _scanState.value = ScanUiState.Error(
-                    message = result.message,
+                val remaining = synchronized(sequentialScanQueue) { sequentialScanQueue.size }
+                val existingDrafts = synchronized(accumulatedReviewDrafts) {
+                    accumulatedReviewDrafts.toList().takeIf { it.isNotEmpty() }
+                }
+                _activeScanState.value = _activeScanState.value?.copy(
+                    currentStep = com.example.ui.ScanStep.ERROR,
+                    stepDescription = "Scan interrupted. File is safe.",
+                    errorMessage = result.reason,
+                    resultDrafts = existingDrafts,
+                    queuedCount = remaining,
                     recoverableUris = lastUris,
                     recoverableSamplePreset = lastSamplePreset,
-                    recoverableNaturalLanguageNote = lastNote,
+                    recoverableNote = lastNote,
                     isSmartCashLog = isSmartCashLog,
                     defaultCashType = defaultCashType
                 )
                 ScanNotificationHelper.postScanErrorNotification(getApplication())
+                true
+            }
+            is ExtractionResult.Error -> {
+                val remaining = synchronized(sequentialScanQueue) { sequentialScanQueue.size }
+                val existingDrafts = synchronized(accumulatedReviewDrafts) {
+                    accumulatedReviewDrafts.toList().takeIf { it.isNotEmpty() }
+                }
+                _activeScanState.value = _activeScanState.value?.copy(
+                    currentStep = com.example.ui.ScanStep.ERROR,
+                    stepDescription = "Scan interrupted. File is safe.",
+                    errorMessage = result.message,
+                    resultDrafts = existingDrafts,
+                    queuedCount = remaining,
+                    recoverableUris = lastUris,
+                    recoverableSamplePreset = lastSamplePreset,
+                    recoverableNote = lastNote,
+                    isSmartCashLog = isSmartCashLog,
+                    defaultCashType = defaultCashType
+                )
+                ScanNotificationHelper.postScanErrorNotification(getApplication())
+                true
             }
         }
     }
@@ -909,7 +1176,12 @@ class SnapSpendViewModel(application: Application) : AndroidViewModel(applicatio
                     item
                 }
             }
+            synchronized(accumulatedReviewDrafts) {
+                accumulatedReviewDrafts.clear()
+                accumulatedReviewDrafts.addAll(updatedList)
+            }
             _scanState.value = ScanUiState.ReviewReady(updatedList)
+            _activeScanState.value = _activeScanState.value?.copy(resultDrafts = updatedList)
         }
     }
 
@@ -918,14 +1190,26 @@ class SnapSpendViewModel(application: Application) : AndroidViewModel(applicatio
         val updated = current.drafts.map {
             if (it.draftId == draftId) it.copy(isSkipped = !it.isSkipped) else it
         }
+        synchronized(accumulatedReviewDrafts) {
+            accumulatedReviewDrafts.clear()
+            accumulatedReviewDrafts.addAll(updated)
+        }
         _scanState.value = ScanUiState.ReviewReady(updated)
+        _activeScanState.value = _activeScanState.value?.copy(resultDrafts = updated)
     }
 
     fun confirmAllReviewDrafts(onComplete: () -> Unit = {}) {
         val current = _scanState.value as? ScanUiState.ReviewReady ?: return
         viewModelScope.launch {
             val summary = repository.commitConfirmedDrafts(current.drafts)
+            synchronized(accumulatedReviewDrafts) {
+                accumulatedReviewDrafts.clear()
+            }
             _scanState.value = ScanUiState.Idle
+            if (activeScanJob?.isActive != true) {
+                _activeScanState.value = null
+                ScanNotificationHelper.cancelScanNotification(getApplication())
+            }
             if (_queuedScans.value.isEmpty()) {
                 ShareIntentHelper.cleanupActiveShareTempFiles()
             }
@@ -939,7 +1223,14 @@ class SnapSpendViewModel(application: Application) : AndroidViewModel(applicatio
     }
 
     fun dismissScanFlow() {
+        synchronized(accumulatedReviewDrafts) {
+            accumulatedReviewDrafts.clear()
+        }
         _scanState.value = ScanUiState.Idle
+        if (activeScanJob?.isActive != true) {
+            _activeScanState.value = null
+            ScanNotificationHelper.cancelScanNotification(getApplication())
+        }
         if (_queuedScans.value.isEmpty()) {
             ShareIntentHelper.cleanupActiveShareTempFiles()
         }

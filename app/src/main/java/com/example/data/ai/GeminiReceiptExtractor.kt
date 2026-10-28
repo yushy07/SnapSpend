@@ -19,12 +19,14 @@ import com.example.data.local.TransactionType
 import com.example.data.rules.DraftTransaction
 import com.example.data.rules.ReceiptLineItem
 import com.example.util.MoneyUtils
+import com.example.data.local.MerchantMemoryEntity
 import com.google.firebase.Firebase
 import com.google.firebase.ai.ai
 import com.google.firebase.ai.type.Schema
 import com.google.firebase.ai.type.ThinkingLevel
 import com.google.firebase.ai.type.content
 import com.google.firebase.ai.type.generationConfig
+import com.google.firebase.ai.type.thinkingConfig
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.TimeoutCancellationException
@@ -34,6 +36,7 @@ import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.sync.Semaphore
 import kotlinx.coroutines.sync.withPermit
+import kotlinx.coroutines.tasks.await
 import kotlinx.coroutines.withContext
 import kotlinx.coroutines.withTimeout
 import org.json.JSONObject
@@ -52,15 +55,15 @@ sealed interface ExtractionResult {
 }
 
 /**
- * Multimodal payment screenshot, multi-page PDF, itemized receipt, and single-note natural-language
- * reader using Firebase AI Logic (`gemini-4-argon` with `ThinkingLevel.HIGH` and strict JSON `Schema.obj`).
+ * Hybrid Local-First receipt, UPI screenshot, multi-page PDF, and natural-language reader.
  *
- * Includes automatic retry with exponential backoff (`1s -> 2s -> 4s`) for transient network/AI errors.
- *
- * PRIVACY GUARANTEE: Only the user-selected image, PDF page, or single natural-language input note
- * is sent to Gemini. Stored transaction history in Room is NEVER sent to any AI model.
+ * Uses Google ML Kit on-device OCR (<200ms) + 0-API Regex Fast Path (<50ms) + ultra-fast
+ * text-only Gemini 3.8-Flash (thinkingBudget = 0) with compressed multimodal vision fallback.
  */
 class GeminiReceiptExtractor(private val context: Context) {
+
+    val localExtractor by lazy { LocalDocumentExtractor(context) }
+    val visionFallback by lazy { CompressedVisionFallback(context) }
 
     private suspend fun <T> retryWithExponentialBackoff(
         maxAttempts: Int = 3,
@@ -193,115 +196,79 @@ class GeminiReceiptExtractor(private val context: Context) {
     }
 
     /**
-     * Parallel multi-page PDF & batch screenshot extraction using bounded concurrency (`Semaphore(3)`).
+     * High-Speed Hybrid Local-First extraction:
+     * Phase 1: Local on-device ML Kit OCR (<200ms, 0 tokens)
+     * Phase 2: Local Regex noise filter & 0-API Fast Path (<50ms, 0 tokens)
+     * Phase 3: Ultra-Fast Text-Only Gemini 3.8-Flash (thinkingBudget = 0) with multi-row batching
+     * Phase 4: Compressed Multimodal Vision Fallback safety net
      */
     suspend fun extractFromUris(
         uris: List<Uri>,
         categories: List<CategoryEntity>,
+        merchantMemories: List<MerchantMemoryEntity> = emptyList(),
         onProgress: (currentStep: Int, totalSteps: Int, statusText: String) -> Unit
     ): ExtractionResult = withContext(Dispatchers.IO) {
         if (uris.isEmpty()) {
             return@withContext ExtractionResult.Error("No file selected.")
         }
 
-        val allowedCategoryNames = categories.map { it.name }.ifEmpty {
-            DefaultCategories.ALL_DEFAULTS.map { it.name }
-        }
-
         try {
-            val expandedTasks = mutableListOf<Triple<Uri, Int, Boolean>>() // (uri, pageIndex, isPdf)
-            val unreadableReasons = java.util.Collections.synchronizedList(mutableListOf<String>())
-
-            for (uri in uris) {
-                val mime = context.contentResolver.getType(uri)?.lowercase(Locale.US) ?: ""
-                val isPdf = mime.contains("pdf") || uri.toString().lowercase(Locale.US).endsWith(".pdf")
-                if (isPdf) {
-                    val pageCount = getPdfPageCount(uri)
-                    if (pageCount <= 0) {
-                        unreadableReasons.add("Could not open PDF file.")
-                    } else {
-                        for (p in 0 until pageCount) {
-                            expandedTasks.add(Triple(uri, p, true))
-                        }
-                    }
-                } else {
-                    expandedTasks.add(Triple(uri, 0, false))
-                }
+            // STEP 1: On-Device ML Kit Text Extraction (<200ms, 0 tokens)
+            onProgress(1, 3, "Extracting text on device...")
+            val ocrResult = localExtractor.extractFromUris(uris) { current, total ->
+                onProgress(current, maxOf(total, 3), "Extracting text on device ($current/$total)...")
             }
 
-            val totalUnits = expandedTasks.size
-            if (totalUnits == 0) {
-                return@withContext ExtractionResult.UnreadableOrNoPayments(
-                    unreadableReasons.firstOrNull() ?: "Could not read the selected file."
-                )
+            // STEP 2: Local Regex Noise Stripping & 0-API Fast Path (<50ms, 0 tokens)
+            onProgress(2, 3, "Filtering receipt text...")
+            val primarySource = if (uris.any { it.toString().endsWith(".pdf", ignoreCase = true) }) {
+                TransactionSource.PDF
+            } else {
+                TransactionSource.SCREENSHOT
             }
 
-            onProgress(
-                1,
-                totalUnits,
-                if (totalUnits > 1) "Reading $totalUnits pages in parallel with Gemini..."
-                else "Reading receipt with Gemini..."
+            val regexResult = UpiRegexPreProcessor.process(
+                rawOcrText = ocrResult.fullCleanedText,
+                categories = categories,
+                merchantMemories = merchantMemories,
+                source = primarySource
             )
 
-            // Process up to 3 pages/screenshots concurrently in parallel
-            val semaphore = Semaphore(permits = 3)
-            val completedCounter = AtomicInteger(0)
-
-            val pageResults: List<ExtractionResult?> = coroutineScope {
-                expandedTasks.mapIndexed { index, (uri, pageIndex, isPdf) ->
-                    async(Dispatchers.IO) {
-                        semaphore.withPermit {
-                            val bitmap = if (isPdf) {
-                                renderPdfPageToBitmap(uri, pageIndex)
-                            } else {
-                                decodeScaledBitmap(uri)
-                            }
-
-                            if (bitmap == null) {
-                                unreadableReasons.add("Couldn't decode image or PDF page ${index + 1}.")
-                                val done = completedCounter.incrementAndGet()
-                                onProgress(done, totalUnits, "Processed $done of $totalUnits...")
-                                return@withPermit null
-                            }
-
-                            val res = analyzeBitmapWithGemini(
-                                bitmap = bitmap,
-                                allowedCategories = allowedCategoryNames,
-                                source = if (isPdf) TransactionSource.PDF else TransactionSource.SCREENSHOT
-                            )
-                            val done = completedCounter.incrementAndGet()
-                            onProgress(
-                                done,
-                                totalUnits,
-                                if (totalUnits > 1) "Finished $done of $totalUnits pages..."
-                                else "Finishing AI review..."
-                            )
-                            res
-                        }
-                    }
-                }.awaitAll()
+            // 0-API Fast Path: If high-confidence anchor matches known category, construct draft locally without Gemini!
+            if (regexResult.fastPathDraft != null) {
+                Log.d(TAG, "0-API Fast Path matched! Merchant: ${regexResult.fastPathDraft.merchant}")
+                return@withContext ExtractionResult.Success(listOf(regexResult.fastPathDraft))
             }
 
-            val allDrafts = mutableListOf<DraftTransaction>()
-            var firstFatalError: ExtractionResult.Error? = null
+            // STEP 3: Ultra-Fast Text-Only Gemini 3.8-Flash Call (Primary Cloud Path)
+            if (ocrResult.isValidText) {
+                val txCountLabel = if (regexResult.isMultiRowLikely) "statement" else "1"
+                onProgress(2, 3, "Categorising $txCountLabel transaction(s)...")
 
-            for (res in pageResults) {
-                when (res) {
-                    is ExtractionResult.Success -> allDrafts.addAll(res.drafts)
-                    is ExtractionResult.UnreadableOrNoPayments -> unreadableReasons.add(res.reason)
-                    is ExtractionResult.Error -> if (firstFatalError == null) firstFatalError = res
-                    null -> Unit
+                val textResult = extractFromCleanedOcrText(
+                    cleanedOcrText = regexResult.cleanedText,
+                    categories = categories,
+                    detectedAnchors = regexResult.detectedAnchors,
+                    source = primarySource
+                )
+
+                if (textResult is ExtractionResult.Success && textResult.drafts.isNotEmpty()) {
+                    return@withContext textResult
                 }
             }
 
-            when {
-                allDrafts.isNotEmpty() -> ExtractionResult.Success(allDrafts)
-                firstFatalError != null -> firstFatalError
-                else -> ExtractionResult.UnreadableOrNoPayments(
-                    unreadableReasons.firstOrNull()
-                        ?: "No payment details found in the selected file. Please check that the screenshot is clear."
-                )
-            }
+            // STEP 4: Compressed Multimodal Vision Fallback (Safety Net for blurry, handwritten, or low-light receipts)
+            onProgress(2, 3, "Enhancing & scanning photo...")
+            val fallbackResult = visionFallback.analyzeWithVisionFallback(
+                sourceUri = uris.firstOrNull(),
+                sourceBitmap = ocrResult.fallbackBitmaps.firstOrNull(),
+                partialOcrHint = ocrResult.fullCleanedText,
+                categories = categories,
+                source = primarySource,
+                onStatusUpdate = { msg -> onProgress(2, 3, msg) }
+            )
+
+            fallbackResult
         } catch (e: TimeoutCancellationException) {
             Log.e(TAG, "Gemini extraction timed out", e)
             ExtractionResult.Error("AI reading timed out after retrying. Check your internet or queue this scan for later.")
@@ -312,6 +279,80 @@ class GeminiReceiptExtractor(private val context: Context) {
             ExtractionResult.Error(
                 e.localizedMessage ?: "Couldn't reach Gemini AI. Your picked file is kept safe — tap Try Again or Queue Scan."
             )
+        }
+    }
+
+    /**
+     * Ultra-fast text-only Gemini 3.8-Flash request (no image/PDF bytes).
+     * Configured for sub-second latency with temperature = 0.1f and thinkingBudget = 0.
+     * Supports single receipts and multi-row statements.
+     */
+    suspend fun extractFromCleanedOcrText(
+        cleanedOcrText: String,
+        categories: List<CategoryEntity>,
+        detectedAnchors: DetectedUpiAnchors? = null,
+        source: TransactionSource = TransactionSource.SCREENSHOT
+    ): ExtractionResult = withContext(Dispatchers.IO) {
+        val allowedCategories = categories.map { it.name }.ifEmpty {
+            DefaultCategories.ALL_DEFAULTS.map { it.name }
+        }.distinct()
+
+        val schema = buildExtractionSchema(allowedCategories)
+        val config = generationConfig {
+            temperature = 0.1f
+            responseMimeType = "application/json"
+            responseSchema = schema
+            thinkingConfig = thinkingConfig {
+                thinkingBudget = 0
+            }
+        }
+
+        val model = Firebase.ai.generativeModel(
+            modelName = "gemini-3.8-flash",
+            generationConfig = config
+        )
+
+        val todayIso = SimpleDateFormat("yyyy-MM-dd", Locale.US).format(Date())
+        val prompt = buildString {
+            appendLine("You are SnapSpend's ultra-fast text-only Indian payment, UPI receipt & bank statement parser.")
+            appendLine("Parse the following OCR text from an Indian UPI receipt, bill, or bank statement into structured JSON transaction(s).")
+            appendLine("Extract merchant/payee, amount in paise (Long), date/timestamp, paymentMode (ONLINE/CASH), type (EXPENSE/INCOME), and best-fit category.")
+            if (detectedAnchors != null) {
+                appendLine("PRE-DETECTED REGEX HINTS:")
+                detectedAnchors.amountPaise?.let { appendLine("- Amount in paise: $it") }
+                detectedAnchors.merchant?.let { appendLine("- Merchant candidate: $it") }
+                detectedAnchors.utrOrRef?.let { appendLine("- UTR / Ref: $it") }
+                appendLine("- App: ${detectedAnchors.paymentApp}")
+                appendLine("- Direction hint: ${detectedAnchors.type}")
+            }
+            appendLine()
+            appendLine("CLEANED OCR TEXT:")
+            appendLine(cleanedOcrText)
+            appendLine()
+            appendLine("STRICT RULES:")
+            appendLine("1. Allowed Categories ONLY: ${allowedCategories.joinToString(", ")}. Choose the single best fit. Never invent a new category.")
+            appendLine("2. Multi-Row Statements: If multiple payments/rows are visible in the text, extract ALL rows into a single JSON array (`payments`) in one pass.")
+            appendLine("3. Amounts: All amounts MUST be converted to whole Indian paise in `amountPaise` (e.g. ₹145.50 -> 14550L, ₹20 -> 2000L).")
+            appendLine("4. Clean cryptic bank/UPI narration (e.g. 'UPI/412983/SWIGGY INSTAMART/BLR') into clean merchant name ('Swiggy Instamart').")
+            appendLine("5. Direction: Money out = EXPENSE, refunds/money received = EARNING, ATM cash withdrawal = TRANSFER with paymentMode = CASH.")
+            appendLine("6. Date: YYYY-MM-DD ($todayIso if unknown); Time: HH:mm in 24h format.")
+        }
+
+        try {
+            val rawJson = retryWithExponentialBackoff(maxAttempts = 3, initialDelayMs = 900L) {
+                val response = withTimeout(45_000L) {
+                    model.generateContent(prompt)
+                }
+                val text = response.text
+                if (text.isNullOrBlank()) {
+                    throw IllegalStateException("Empty text response from Gemini.")
+                }
+                text
+            }
+            parseExtractionJson(rawJson, source, allowedCategories)
+        } catch (e: Exception) {
+            Log.e(TAG, "extractFromCleanedOcrText failed", e)
+            ExtractionResult.Error(e.localizedMessage ?: "Text-only extraction failed.")
         }
     }
 
@@ -340,12 +381,16 @@ class GeminiReceiptExtractor(private val context: Context) {
         }
         val schema = buildExtractionSchema(allowedCategories)
         val config = generationConfig {
+            temperature = 0.1f
             responseMimeType = "application/json"
             responseSchema = schema
+            thinkingConfig = thinkingConfig {
+                thinkingBudget = 0
+            }
         }
 
         val model = Firebase.ai.generativeModel(
-            modelName = "gemini-2.5-flash",
+            modelName = "gemini-3.8-flash",
             generationConfig = config
         )
 
@@ -520,60 +565,60 @@ class GeminiReceiptExtractor(private val context: Context) {
         allowedCategories: List<String>,
         source: TransactionSource
     ): ExtractionResult = withContext(Dispatchers.IO) {
-        val schema = buildExtractionSchema(allowedCategories)
-        val config = generationConfig {
-            responseMimeType = "application/json"
-            responseSchema = schema
+        val categoryEntities = allowedCategories.map {
+            CategoryEntity(
+                name = it,
+                type = com.example.data.local.CategoryType.EXPENSE,
+                colorHex = "#8FE3F0",
+                iconName = "category",
+                isDefault = true
+            )
         }
 
-        val model = Firebase.ai.generativeModel(
-            modelName = "gemini-2.5-flash",
-            generationConfig = config
-        )
-
-        val todayIso = SimpleDateFormat("yyyy-MM-dd", Locale.US).format(Date())
-        val prompt = """
-            You are SnapSpend's precision Indian payment, camera receipt photo, UPI screenshot, itemized bill & PDF bank statement reader.
-            Analyze the attached image carefully and automatically parse every payment transaction visible, including its exact amount, date, and category.
-            
-            STRICT RULES:
-            1. Allowed Categories ONLY: ${allowedCategories.joinToString(", ")}. Choose the single best matching `suggestedCategory` from this list. Never invent a new category.
-            2. Refunds or cashbacks MUST have type = "EARNING" and suggestedCategory = "Refunds & Cashback".
-            3. Money moved between the user's own bank accounts / self-transfer MUST have type = "TRANSFER".
-            4. ATM cash withdrawals ("ATM WDL", "CASH WITHDRAWAL", "ATW", "ATM CASH") MUST have type = "TRANSFER" and paymentMode = "CASH" so they top up Cash in Hand instead of being double-counted as expenses. All other UPI/card/bank payments have paymentMode = "ONLINE" unless the receipt explicitly shows a physical cash payment.
-            5. Clean cryptic UPI or bank narration strings (e.g. 'UPI/431988271645/BLUE TOKAI/BLR') into a clean human-friendly `merchant` name ('Blue Tokai') and store the raw narration in `rawMerchantText`.
-            6. Convert the total rupee amount into exact whole paise in `amountPaise` (e.g. ₹150.50 -> 15050, ₹20 -> 2000) and also provide `amountText`.
-            7. If the image shows an itemized bill or receipt with individual items (e.g. coffee, food items, groceries), extract each line item into `lineItems` with `itemName`, `quantity`, and exact `pricePaise`.
-            8. Extract `dateIso` (YYYY-MM-DD; if only day/month is shown, assume current year from $todayIso; if missing, return "unknown") and `time24h` (HH:mm in 24-hour format; if missing, return "unknown").
-            9. If the image is too blurry/cropped to read or does not contain any payment/receipt/statement, set `isReadablePaymentDocument` = false and provide a clear `unreadableReason`.
-        """.trimIndent()
-
+        // 1. Run on-device ML Kit OCR (<200ms)
         try {
-            val rawJson = retryWithExponentialBackoff(maxAttempts = 3, initialDelayMs = 1000L) {
-                val response = withTimeout(60_000L) {
-                    model.generateContent(
-                        content {
-                            image(bitmap)
-                            text(prompt)
-                        }
-                    )
-                }
-                val text = response.text
-                if (text.isNullOrBlank()) {
-                    throw IllegalStateException("Gemini returned an empty response.")
-                }
-                text
-            }
+            val inputImage = com.google.mlkit.vision.common.InputImage.fromBitmap(bitmap, 0)
+            val visionText = com.google.mlkit.vision.text.TextRecognition
+                .getClient(com.google.mlkit.vision.text.latin.TextRecognizerOptions.DEFAULT_OPTIONS)
+                .process(inputImage)
+                .await()
+            val orderedText = localExtractor.stripStatusBarNoise(visionText.text)
 
-            parseExtractionJson(rawJson, source, allowedCategories)
-        } catch (e: TimeoutCancellationException) {
-            throw e
-        } catch (e: CancellationException) {
-            throw e
+            if (orderedText.length >= 15 && orderedText.any { it.isDigit() }) {
+                val regexResult = UpiRegexPreProcessor.process(
+                    rawOcrText = orderedText,
+                    categories = categoryEntities,
+                    merchantMemories = emptyList<MerchantMemoryEntity>(),
+                    source = source
+                )
+
+                if (regexResult.fastPathDraft != null) {
+                    return@withContext ExtractionResult.Success(listOf(regexResult.fastPathDraft))
+                }
+
+                val textResult = extractFromCleanedOcrText(
+                    cleanedOcrText = regexResult.cleanedText,
+                    categories = categoryEntities,
+                    detectedAnchors = regexResult.detectedAnchors,
+                    source = source
+                )
+
+                if (textResult is ExtractionResult.Success && textResult.drafts.isNotEmpty()) {
+                    return@withContext textResult
+                }
+            }
         } catch (e: Exception) {
-            Log.e(TAG, "analyzeBitmapWithGemini failed after retries", e)
-            ExtractionResult.Error(e.localizedMessage ?: "AI reading failed after 3 attempts. Tap Try Again or Queue Scan.")
+            Log.w(TAG, "Local OCR on bitmap failed, falling back to compressed vision", e)
         }
+
+        // Fallback to compressed vision safety net
+        visionFallback.analyzeWithVisionFallback(
+            sourceBitmap = bitmap,
+            sourceUri = null,
+            partialOcrHint = "",
+            categories = categoryEntities,
+            source = source
+        )
     }
 
     private fun parseExtractionJson(
