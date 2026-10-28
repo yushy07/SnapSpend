@@ -214,7 +214,8 @@ data class FilterState(
 data class ChartControlState(
     val chartDateRange: DateRangeFilter = DateRangeFilter.THIS_MONTH,
     val lineGranularity: String = "DAILY", // "DAILY", "WEEKLY", "MONTHLY"
-    val paymentModeFilter: PaymentModeFilter = PaymentModeFilter.ALL
+    val paymentModeFilter: PaymentModeFilter = PaymentModeFilter.ALL,
+    val selectedCategory: String? = null
 )
 
 enum class UndoActionKind {
@@ -257,6 +258,8 @@ data class SnapSpendUiState(
     // Charts & Local Insights
     val chartDateRange: DateRangeFilter = DateRangeFilter.THIS_MONTH,
     val chartPaymentModeFilter: PaymentModeFilter = PaymentModeFilter.ALL,
+    val chartCategoryFilter: String? = null,
+    val availableChartCategories: List<String> = emptyList(),
     val lineGranularity: String = "DAILY",
     val editorialPillBars: List<PillBarEntry> = emptyList(),
     val chartCategorySlices: List<CategorySlice> = emptyList(),
@@ -302,6 +305,7 @@ class SnapSpendViewModel(application: Application) : AndroidViewModel(applicatio
 
     private var activeScanJob: Job? = null
     private val sequentialScanQueue = ArrayDeque<PendingBackgroundScanJob>()
+    private val pendingScanCleanups = java.util.Collections.synchronizedList(mutableListOf<() -> Unit>())
     private val accumulatedReviewDrafts = mutableListOf<DraftTransaction>()
     private val _activeScanState = MutableStateFlow<com.example.ui.ScanProgressState?>(null)
     val activeScanState: StateFlow<com.example.ui.ScanProgressState?> = _activeScanState.asStateFlow()
@@ -377,6 +381,25 @@ class SnapSpendViewModel(application: Application) : AndroidViewModel(applicatio
                 snapSpendPrefs.scanTimingLogsFlow
             ) { active, trashed, logs -> Triple(active.size, trashed.size, logs.size) }.collect {
                 refreshDataCheckSnapshot()
+            }
+        }
+        viewModelScope.launch {
+            combine(
+                repository.transactionsFlow,
+                repository.categoriesFlow,
+                repository.budgetsFlow
+            ) { allTxs, categories, budgets ->
+                val now = System.currentTimeMillis()
+                val (thisMonthStart, thisMonthEnd) = LocalInsightsAndRulesEngine.getMonthBounds(now, 0)
+                val thisMonthTxs = allTxs.filter { it.timestamp in thisMonthStart..thisMonthEnd }
+                val statuses = LocalInsightsAndRulesEngine.computeBudgetStatuses(
+                    budgets = budgets,
+                    categories = categories,
+                    thisMonthTransactions = thisMonthTxs
+                )
+                statuses to budgets
+            }.collect { (statuses, budgets) ->
+                checkAndDispatchBudgetNotifications(statuses, budgets)
             }
         }
     }
@@ -710,7 +733,6 @@ class SnapSpendViewModel(application: Application) : AndroidViewModel(applicatio
             thisMonthTransactions = thisMonthTxs
         )
         val activeAlerts = budgetStatuses.filter { it.isWarning80 || it.isExceeded100 }
-        checkAndDispatchBudgetNotifications(budgetStatuses, budgets)
 
         // Apply transaction explorer filters
         val filtered = filterTransactions(allTxs, filters, now)
@@ -723,39 +745,60 @@ class SnapSpendViewModel(application: Application) : AndroidViewModel(applicatio
             .distinct()
             .sorted()
 
-        // Charts & Insights calculations (100% local integer paise math, filtered by All | Online | Cash)
+        // Charts & Insights calculations (100% local integer paise math, filtered by All | Online | Cash & Category)
         val chartModeFilteredTxs = when (chartCtrl.paymentModeFilter) {
             PaymentModeFilter.ALL -> allTxs
             PaymentModeFilter.ONLINE -> allTxs.filter { it.paymentMode.equals("ONLINE", ignoreCase = true) }
             PaymentModeFilter.CASH -> allTxs.filter { it.paymentMode.equals("CASH", ignoreCase = true) }
         }
-        val chartRangeTxs = filterByDateRange(chartModeFilteredTxs, chartCtrl.chartDateRange, now)
-        val chartSlices = LocalInsightsAndRulesEngine.buildCategorySlices(
-            transactions = chartRangeTxs,
+        val chartRangeAllCategoryTxs = filterByDateRange(chartModeFilteredTxs, chartCtrl.chartDateRange, now)
+        val allRangeCategorySlices = LocalInsightsAndRulesEngine.buildCategorySlices(
+            transactions = chartRangeAllCategoryTxs,
             categories = categories,
             type = TransactionType.EXPENSE
         )
+        val availableChartCategories = (
+            allRangeCategorySlices.map { it.categoryName } +
+                categories.filter { it.type == CategoryType.EXPENSE }.map { it.name }
+            ).distinct()
 
-        val pillBuckets: List<Pair<String, Long>> = if (chartSlices.isNotEmpty()) {
+        val activeChartCategory = chartCtrl.selectedCategory?.takeIf { it in availableChartCategories }
+        val chartCategoryFilteredModeTxs = if (activeChartCategory != null) {
+            chartModeFilteredTxs.filter { it.category.equals(activeChartCategory, ignoreCase = true) }
+        } else {
+            chartModeFilteredTxs
+        }
+        val chartRangeTxs = if (activeChartCategory != null) {
+            chartRangeAllCategoryTxs.filter { it.category.equals(activeChartCategory, ignoreCase = true) }
+        } else {
+            chartRangeAllCategoryTxs
+        }
+        val chartSlices = if (activeChartCategory != null) {
+            allRangeCategorySlices.filter { it.categoryName.equals(activeChartCategory, ignoreCase = true) }
+        } else {
+            allRangeCategorySlices
+        }
+
+        val linePoints = LocalInsightsAndRulesEngine.buildLineChartPoints(
+            allTransactions = chartCategoryFilteredModeTxs,
+            granularity = chartCtrl.lineGranularity,
+            nowMillis = now
+        )
+
+        val pillBuckets: List<Pair<String, Long>> = if (activeChartCategory == null && chartSlices.isNotEmpty()) {
             chartSlices.take(6).map { slice ->
                 val shortLabel = slice.categoryName.split(" ").first().take(7)
                 shortLabel to slice.amountPaise
             }
         } else {
-            val linePts = LocalInsightsAndRulesEngine.buildLineChartPoints(chartModeFilteredTxs, chartCtrl.lineGranularity, now)
-            linePts.map { it.label to it.amountPaise }
+            linePoints.map { it.label to it.amountPaise }
         }
         val editorialPillBars = LocalInsightsAndRulesEngine.buildPillBars(pillBuckets)
 
-        val linePoints = LocalInsightsAndRulesEngine.buildLineChartPoints(
-            allTransactions = chartModeFilteredTxs,
-            granularity = chartCtrl.lineGranularity,
-            nowMillis = now
-        )
-        val comparisons = LocalInsightsAndRulesEngine.buildPeriodComparisons(chartModeFilteredTxs, now)
-        val monthlyBars = LocalInsightsAndRulesEngine.buildMonthlyIncomeExpenseBars(chartModeFilteredTxs, now)
-        val top5Places = LocalInsightsAndRulesEngine.buildTop5SpendingPlaces(chartRangeTxs.ifEmpty { chartModeFilteredTxs })
-        val localInsights = LocalInsightsAndRulesEngine.generateLocalMathInsights(chartModeFilteredTxs, now)
+        val comparisons = LocalInsightsAndRulesEngine.buildPeriodComparisons(chartCategoryFilteredModeTxs, now)
+        val monthlyBars = LocalInsightsAndRulesEngine.buildMonthlyIncomeExpenseBars(chartCategoryFilteredModeTxs, now)
+        val top5Places = LocalInsightsAndRulesEngine.buildTop5SpendingPlaces(chartRangeTxs)
+        val localInsights = LocalInsightsAndRulesEngine.generateLocalMathInsights(chartCategoryFilteredModeTxs, now)
 
         val totalMonthlyBudgetPaise = budgets.sumOf { it.monthlyLimitPaise }
         val monthEndEstimate = MonthEndMath.computeMonthEndEstimate(
@@ -794,6 +837,8 @@ class SnapSpendViewModel(application: Application) : AndroidViewModel(applicatio
             availablePaymentApps = paymentApps,
             chartDateRange = chartCtrl.chartDateRange,
             chartPaymentModeFilter = chartCtrl.paymentModeFilter,
+            chartCategoryFilter = activeChartCategory,
+            availableChartCategories = availableChartCategories,
             lineGranularity = chartCtrl.lineGranularity,
             editorialPillBars = editorialPillBars,
             chartCategorySlices = chartSlices,
@@ -925,7 +970,7 @@ class SnapSpendViewModel(application: Application) : AndroidViewModel(applicatio
     }
 
     fun clearAllFilters() {
-        _filterState.value = FilterState(paymentModeFilter = _filterState.value.paymentModeFilter)
+        _filterState.value = FilterState()
     }
 
     fun updateChartDateRange(range: DateRangeFilter) {
@@ -934,6 +979,14 @@ class SnapSpendViewModel(application: Application) : AndroidViewModel(applicatio
 
     fun updateChartPaymentModeFilter(mode: PaymentModeFilter) {
         _chartControl.value = _chartControl.value.copy(paymentModeFilter = mode)
+    }
+
+    fun updateChartCategoryFilter(category: String?) {
+        _chartControl.value = _chartControl.value.copy(selectedCategory = category)
+    }
+
+    fun resetChartFilters() {
+        _chartControl.value = ChartControlState(lineGranularity = _chartControl.value.lineGranularity)
     }
 
     fun updateLineGranularity(granularity: String) {
@@ -1263,6 +1316,8 @@ class SnapSpendViewModel(application: Application) : AndroidViewModel(applicatio
 
                 if (result is ExtractionResult.Success || result is ExtractionResult.SkippedKnown) {
                     currentJob.onCleanup?.invoke()
+                } else if (currentJob.onCleanup != null) {
+                    pendingScanCleanups.add(currentJob.onCleanup)
                 }
 
                 val shouldStopLoop = handleBackgroundExtractionResult(
@@ -1511,6 +1566,15 @@ class SnapSpendViewModel(application: Application) : AndroidViewModel(applicatio
         processSelectedUris(failedUris)
     }
 
+    private fun runAndClearPendingScanCleanups() {
+        val callbacks = synchronized(pendingScanCleanups) {
+            val copy = pendingScanCleanups.toList()
+            pendingScanCleanups.clear()
+            copy
+        }
+        callbacks.forEach { it.invoke() }
+    }
+
     fun cancelActiveScan() {
         activeScanJob?.cancel()
         activeScanJob = null
@@ -1518,6 +1582,7 @@ class SnapSpendViewModel(application: Application) : AndroidViewModel(applicatio
             sequentialScanQueue.forEach { it.onCleanup?.invoke() }
             sequentialScanQueue.clear()
         }
+        runAndClearPendingScanCleanups()
         synchronized(accumulatedReviewDrafts) {
             accumulatedReviewDrafts.clear()
         }
@@ -1534,6 +1599,7 @@ class SnapSpendViewModel(application: Application) : AndroidViewModel(applicatio
         }
         val existingDrafts = synchronized(accumulatedReviewDrafts) { accumulatedReviewDrafts.toList() }
         if (existingDrafts.isNotEmpty() && _activeScanState.value?.currentStep == com.example.ui.ScanStep.ERROR) {
+            runAndClearPendingScanCleanups()
             // Transition back to COMPLETE for previously succeeded drafts in the batch
             val first = existingDrafts.first()
             val count = existingDrafts.size
@@ -1554,6 +1620,7 @@ class SnapSpendViewModel(application: Application) : AndroidViewModel(applicatio
             ScanNotificationHelper.postScanSuccessNotification(getApplication(), merchant, amountFormatted, count)
             return
         }
+        runAndClearPendingScanCleanups()
         synchronized(accumulatedReviewDrafts) {
             accumulatedReviewDrafts.clear()
         }
@@ -1994,6 +2061,7 @@ class SnapSpendViewModel(application: Application) : AndroidViewModel(applicatio
         synchronized(accumulatedReviewDrafts) {
             accumulatedReviewDrafts.clear()
         }
+        runAndClearPendingScanCleanups()
         _scanState.value = ScanUiState.Idle
         if (activeScanJob?.isActive != true) {
             _activeScanState.value = null

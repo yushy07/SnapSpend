@@ -68,8 +68,11 @@ import androidx.compose.material.icons.filled.School
 import androidx.compose.material.icons.filled.Settings
 import androidx.compose.material.icons.filled.ShoppingBag
 import androidx.compose.material.icons.filled.ShoppingBasket
+import androidx.compose.material.icons.filled.Check
 import androidx.compose.material.icons.filled.Storefront
 import androidx.compose.material.icons.filled.Work
+import androidx.compose.material3.DropdownMenu
+import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Surface
@@ -395,88 +398,150 @@ fun TinySectionLabel(
 
 /**
  * White 3D pill dropdown with a trailing chevron (like "This Week v", "All Categories v", "Today v").
+ * When [menuOptions] and [onOptionSelected] are provided, tapping opens a styled popup menu for direct 1-tap selection.
  */
 @Composable
 fun WhitePillDropdown(
     label: String,
-    onClick: () -> Unit,
+    onClick: () -> Unit = {},
     modifier: Modifier = Modifier,
     backgroundColor: Color = PureWhite,
     textColor: Color = InkBlack,
     fillWidth: Boolean = false,
+    menuOptions: List<String> = emptyList(),
+    selectedOption: String = label,
+    onOptionSelected: ((String) -> Unit)? = null,
     testTag: String? = null
 ) {
     val view = LocalView.current
     val reducedMotion = LocalReducedMotion.current
+    var menuExpanded by remember { mutableStateOf(false) }
     var toggleSpin by remember { mutableStateOf(false) }
+    val hasPopupMenu = menuOptions.isNotEmpty() && onOptionSelected != null
     val chevronRotation by animateFloatAsState(
-        targetValue = if (toggleSpin) 180f else 0f,
+        targetValue = when {
+            hasPopupMenu -> if (menuExpanded) 180f else 0f
+            else -> if (toggleSpin) 180f else 0f
+        },
         animationSpec = Motion.physicalSpring(reducedMotion = reducedMotion),
         label = "dropdownChevronRotation"
     )
     val taggedModifier = if (testTag != null) modifier.testTag(testTag) else modifier
-    Editorial3DLayerBox(
-        modifier = taggedModifier.minimumInteractiveComponentSize(),
-        shape = CircleShape,
-        extrusionColor = InkBlack,
-        depthX = 3.dp,
-        depthY = 4.dp
-    ) {
-        Surface(
-            onClick = {
-                Motion.performLightTapHaptic(view)
-                toggleSpin = !toggleSpin
-                onClick()
-            },
-            modifier = if (fillWidth) Modifier.fillMaxWidth() else Modifier,
+    Box(modifier = taggedModifier) {
+        Editorial3DLayerBox(
+            modifier = (if (fillWidth) Modifier.fillMaxWidth() else Modifier).minimumInteractiveComponentSize(),
             shape = CircleShape,
-            color = backgroundColor,
-            contentColor = textColor,
-            border = BorderStroke(1.5.dp, InkBlack)
+            extrusionColor = InkBlack,
+            depthX = 3.dp,
+            depthY = 4.dp
         ) {
-            Row(
-                modifier = (if (fillWidth) Modifier.fillMaxWidth() else Modifier)
-                    .padding(horizontal = 16.dp, vertical = 9.dp),
-                verticalAlignment = Alignment.CenterVertically,
-                horizontalArrangement = if (fillWidth) {
-                    Arrangement.SpaceBetween
-                } else {
-                    Arrangement.spacedBy(6.dp)
-                }
+            Surface(
+                onClick = {
+                    Motion.performLightTapHaptic(view)
+                    if (hasPopupMenu) {
+                        menuExpanded = !menuExpanded
+                    } else {
+                        toggleSpin = !toggleSpin
+                        onClick()
+                    }
+                },
+                modifier = if (fillWidth) Modifier.fillMaxWidth() else Modifier,
+                shape = CircleShape,
+                color = backgroundColor,
+                contentColor = textColor,
+                border = BorderStroke(1.5.dp, InkBlack)
             ) {
-                // Anchor scale + fade transition when the selected filter label changes
-                AnimatedContent(
-                    targetState = label,
-                    transitionSpec = {
-                        (fadeIn(Motion.quickTween(reducedMotion)) +
-                            scaleIn(initialScale = 0.92f, animationSpec = Motion.physicalSpring(reducedMotion)))
-                            .togetherWith(
-                                fadeOut(Motion.quickTween(reducedMotion)) +
-                                    scaleOut(targetScale = 0.94f, animationSpec = Motion.quickTween(reducedMotion))
-                            )
-                    },
-                    modifier = if (fillWidth) Modifier.weight(1f, fill = false) else Modifier,
-                    label = "dropdownLabelAnim"
-                ) { targetLabel ->
-                    Text(
-                        text = targetLabel,
-                        style = MaterialTheme.typography.labelLarge.copy(
-                            fontWeight = FontWeight.SemiBold,
-                            fontSize = 13.sp
-                        ),
-                        color = textColor,
-                        maxLines = 1,
-                        overflow = TextOverflow.Ellipsis
+                Row(
+                    modifier = (if (fillWidth) Modifier.fillMaxWidth() else Modifier)
+                        .padding(horizontal = 16.dp, vertical = 9.dp),
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = if (fillWidth) {
+                        Arrangement.SpaceBetween
+                    } else {
+                        Arrangement.spacedBy(6.dp)
+                    }
+                ) {
+                    // Anchor scale + fade transition when the selected filter label changes
+                    AnimatedContent(
+                        targetState = label,
+                        transitionSpec = {
+                            (fadeIn(Motion.quickTween(reducedMotion)) +
+                                scaleIn(initialScale = 0.92f, animationSpec = Motion.physicalSpring(reducedMotion)))
+                                .togetherWith(
+                                    fadeOut(Motion.quickTween(reducedMotion)) +
+                                        scaleOut(targetScale = 0.94f, animationSpec = Motion.quickTween(reducedMotion))
+                                )
+                        },
+                        modifier = if (fillWidth) Modifier.weight(1f, fill = false) else Modifier,
+                        label = "dropdownLabelAnim"
+                    ) { targetLabel ->
+                        Text(
+                            text = targetLabel,
+                            style = MaterialTheme.typography.labelLarge.copy(
+                                fontWeight = FontWeight.SemiBold,
+                                fontSize = 13.sp
+                            ),
+                            color = textColor,
+                            maxLines = 1,
+                            overflow = TextOverflow.Ellipsis
+                        )
+                    }
+                    Icon(
+                        imageVector = Icons.Default.KeyboardArrowDown,
+                        contentDescription = null,
+                        tint = textColor,
+                        modifier = Modifier
+                            .size(16.dp)
+                            .graphicsLayer { rotationZ = chevronRotation }
                     )
                 }
-                Icon(
-                    imageVector = Icons.Default.KeyboardArrowDown,
-                    contentDescription = null,
-                    tint = textColor,
-                    modifier = Modifier
-                        .size(16.dp)
-                        .graphicsLayer { rotationZ = chevronRotation }
-                )
+            }
+        }
+
+        if (hasPopupMenu) {
+            DropdownMenu(
+                expanded = menuExpanded,
+                onDismissRequest = { menuExpanded = false },
+                shape = RoundedCornerShape(18.dp),
+                containerColor = PureWhite,
+                border = BorderStroke(1.8.dp, InkBlack)
+            ) {
+                menuOptions.forEach { option ->
+                    val isSelected = option.equals(selectedOption, ignoreCase = true)
+                    DropdownMenuItem(
+                        text = {
+                            Text(
+                                text = option,
+                                style = MaterialTheme.typography.bodyMedium.copy(
+                                    fontWeight = if (isSelected) FontWeight.ExtraBold else FontWeight.SemiBold
+                                ),
+                                color = InkBlack
+                            )
+                        },
+                        trailingIcon = if (isSelected) {
+                            {
+                                Icon(
+                                    imageVector = Icons.Default.Check,
+                                    contentDescription = "Selected",
+                                    tint = InkBlack,
+                                    modifier = Modifier.size(18.dp)
+                                )
+                            }
+                        } else null,
+                        onClick = {
+                            Motion.performLightTapHaptic(view)
+                            menuExpanded = false
+                            onOptionSelected?.invoke(option)
+                        },
+                        modifier = Modifier
+                            .padding(horizontal = 6.dp, vertical = 2.dp)
+                            .clip(RoundedCornerShape(12.dp))
+                            .background(if (isSelected) SunnyYellow else Color.Transparent)
+                            .testTag(
+                                "${testTag ?: "pill_dropdown"}_option_${option.lowercase().replace(" ", "_")}"
+                            )
+                    )
+                }
             }
         }
     }

@@ -117,6 +117,7 @@ fun SpendingOverTimeAreaChartCard(
     dayEntries: List<DaySpendChipData>,
     monthlyBudgetAveragePaise: Long,
     onPeriodDropdownClick: () -> Unit,
+    onPeriodSelected: ((String) -> Unit)? = null,
     onSetBudgetClick: (() -> Unit)? = null,
     modifier: Modifier = Modifier
 ) {
@@ -224,6 +225,15 @@ fun SpendingOverTimeAreaChartCard(
                     Spacer(modifier = Modifier.width(8.dp))
                     WhitePillDropdown(
                         label = periodLabel,
+                        menuOptions = listOf("This Week", "This Month"),
+                        selectedOption = periodLabel,
+                        onOptionSelected = { picked ->
+                            if (onPeriodSelected != null) {
+                                onPeriodSelected(picked)
+                            } else if (!picked.equals(periodLabel, ignoreCase = true)) {
+                                onPeriodDropdownClick()
+                            }
+                        },
                         onClick = onPeriodDropdownClick,
                         backgroundColor = PureWhite,
                         textColor = InkBlack,

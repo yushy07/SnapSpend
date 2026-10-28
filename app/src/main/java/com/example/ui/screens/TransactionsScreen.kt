@@ -13,12 +13,16 @@ import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.itemsIndexed
+import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.foundation.text.KeyboardActions
+import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.FormatListBulleted
 import androidx.compose.material.icons.filled.Clear
 import androidx.compose.material.icons.filled.Receipt
+import androidx.compose.material.icons.filled.Refresh
 import androidx.compose.material.icons.filled.Search
 import androidx.compose.material.icons.filled.Tune
 import androidx.compose.material3.Icon
@@ -29,6 +33,7 @@ import androidx.compose.material3.OutlinedTextFieldDefaults
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.saveable.rememberSaveable
@@ -36,8 +41,10 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.platform.LocalFocusManager
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
@@ -100,8 +107,22 @@ fun TransactionsScreen(
 ) {
     val tokens = SnapSpendThemeTokens.colors
     val isDark = tokens.isDark
+    val focusManager = LocalFocusManager.current
+    val listState = rememberLazyListState()
     val filters = uiState.filterState
     var showFilterSheet by rememberSaveable { mutableStateOf(false) }
+
+    LaunchedEffect(
+        filters.dateRange,
+        filters.selectedCategory,
+        filters.selectedType,
+        filters.selectedPaymentApp,
+        filters.paymentModeFilter
+    ) {
+        if (listState.firstVisibleItemIndex > 0 || listState.firstVisibleItemScrollOffset > 0) {
+            listState.animateScrollToItem(0)
+        }
+    }
 
     val activeFilterLabels = buildList {
         if (filters.dateRange != DateRangeFilter.ALL) add(filters.dateRange.label)
@@ -138,6 +159,7 @@ fun TransactionsScreen(
     MarkScreenEntrancePlayedEffect(screenKey = "transactions")
 
     LazyColumn(
+        state = listState,
         modifier = modifier
             .fillMaxSize()
             .testTag("transactions_screen_list"),
@@ -169,12 +191,21 @@ fun TransactionsScreen(
                             if (hasActiveFilter) {
                                 UnderlinedActionLink(
                                     text = "Reset",
-                                    onClick = onClearFilters,
+                                    onClick = {
+                                        focusManager.clearFocus()
+                                        onClearFilters()
+                                    },
                                     testTag = "reset_filters_link"
                                 )
                             }
                             WhitePillDropdown(
                                 label = filters.dateRange.label,
+                                menuOptions = DateRangeFilter.entries.map { it.label },
+                                selectedOption = filters.dateRange.label,
+                                onOptionSelected = { pickedLabel ->
+                                    focusManager.clearFocus()
+                                    DateRangeFilter.entries.firstOrNull { it.label == pickedLabel }?.let(onDateRangeChange)
+                                },
                                 onClick = {
                                     val entries = DateRangeFilter.entries
                                     val nextIdx = (entries.indexOf(filters.dateRange) + 1) % entries.size
@@ -191,7 +222,10 @@ fun TransactionsScreen(
                     options = PaymentModeFilter.entries,
                     selectedOption = filters.paymentModeFilter,
                     labelProvider = { it.label },
-                    onOptionSelected = onPaymentModeFilterChange,
+                    onOptionSelected = {
+                        focusManager.clearFocus()
+                        onPaymentModeFilterChange(it)
+                    },
                     optionTestTagProvider = { "tx_payment_mode_${it.name.lowercase()}" }
                 )
 
@@ -251,7 +285,10 @@ fun TransactionsScreen(
                                 }
                             }
                             IconButton(
-                                onClick = { showFilterSheet = true },
+                                onClick = {
+                                    focusManager.clearFocus()
+                                    showFilterSheet = true
+                                },
                                 modifier = Modifier.testTag("open_filters_sheet_button")
                             ) {
                                 Icon(
@@ -263,6 +300,11 @@ fun TransactionsScreen(
                         }
                     },
                     singleLine = true,
+                    keyboardOptions = KeyboardOptions(imeAction = ImeAction.Search),
+                    keyboardActions = KeyboardActions(
+                        onSearch = { focusManager.clearFocus() },
+                        onDone = { focusManager.clearFocus() }
+                    ),
                     shape = CircleShape,
                     colors = OutlinedTextFieldDefaults.colors(
                         focusedContainerColor = PureWhite,
@@ -372,6 +414,47 @@ fun TransactionsScreen(
                                 style = MaterialTheme.typography.bodyLarge.copy(fontWeight = FontWeight.SemiBold),
                                 color = InkBlack.copy(alpha = 0.82f)
                             )
+                            if (hasActiveFilter) {
+                                Spacer(modifier = Modifier.height(14.dp))
+                                Editorial3DLayerBox(
+                                    shape = CircleShape,
+                                    extrusionColor = InkBlack,
+                                    depthX = 2.5.dp,
+                                    depthY = 3.5.dp
+                                ) {
+                                    Surface(
+                                        onClick = {
+                                            focusManager.clearFocus()
+                                            onClearFilters()
+                                        },
+                                        modifier = Modifier
+                                            .minimumInteractiveComponentSize()
+                                            .testTag("reset_tx_filters_button"),
+                                        shape = CircleShape,
+                                        color = SunnyYellow,
+                                        contentColor = InkBlack,
+                                        border = BorderStroke(1.6.dp, InkBlack)
+                                    ) {
+                                        Row(
+                                            modifier = Modifier.padding(horizontal = 16.dp, vertical = 10.dp),
+                                            verticalAlignment = Alignment.CenterVertically,
+                                            horizontalArrangement = Arrangement.spacedBy(8.dp)
+                                        ) {
+                                            Icon(
+                                                imageVector = Icons.Default.Refresh,
+                                                contentDescription = null,
+                                                tint = InkBlack,
+                                                modifier = Modifier.size(16.dp)
+                                            )
+                                            Text(
+                                                text = "RESET FILTERS",
+                                                style = CondensedCardTitleStyle.copy(fontSize = 16.sp),
+                                                color = InkBlack
+                                            )
+                                        }
+                                    }
+                                }
+                            }
                         }
                     }
                 }

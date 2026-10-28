@@ -103,6 +103,7 @@ import androidx.compose.ui.input.nestedscroll.NestedScrollConnection
 import androidx.compose.ui.input.nestedscroll.NestedScrollSource
 import androidx.compose.ui.input.nestedscroll.nestedScroll
 import androidx.compose.ui.platform.LocalDensity
+import androidx.compose.ui.platform.LocalFocusManager
 import androidx.compose.ui.platform.LocalView
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.semantics.Role
@@ -341,6 +342,7 @@ fun SnapSpendRootScreen(
     val isDark = tokens.isDark
     val coroutineScope = rememberCoroutineScope()
     val soundManager = LocalRetroSoundManager.current
+    val focusManager = LocalFocusManager.current
 
     val uiState by viewModel.uiState.collectAsStateWithLifecycle()
     val scanState by viewModel.scanState.collectAsStateWithLifecycle()
@@ -382,6 +384,7 @@ fun SnapSpendRootScreen(
     var notificationPermissionStatus by remember { mutableStateOf("NOT_ASKED") }
 
     if (showOnboardingReplay) {
+        BackHandler { showOnboardingReplay = false }
         OnboardingCarouselScreen(
             onFinish = { showOnboardingReplay = false }
         )
@@ -716,6 +719,7 @@ fun SnapSpendRootScreen(
                             EditorialBottomNavBar(
                                 currentTab = currentTab,
                                 onTabSelected = {
+                                    focusManager.clearFocus()
                                     if (it != SnapSpendTab.SETTINGS) {
                                         showTrashScreen = false
                                         showDataCheckScreen = false
@@ -871,7 +875,7 @@ fun SnapSpendRootScreen(
                                                 amountPaise = 0L,
                                                 type = TransactionType.TRANSFER,
                                                 merchant = "ATM Withdrawal",
-                                                category = "Other",
+                                                category = "Transfers",
                                                 paymentApp = "Cash",
                                                 status = TransactionStatus.SUCCESS,
                                                 note = "ATM Withdrawal / Cash Wallet Top-Up",
@@ -919,6 +923,8 @@ fun SnapSpendRootScreen(
                                         onChartDateRangeChange = viewModel::updateChartDateRange,
                                         onLineGranularityChange = viewModel::updateLineGranularity,
                                         onChartPaymentModeFilterChange = viewModel::updateChartPaymentModeFilter,
+                                        onChartCategoryFilterChange = viewModel::updateChartCategoryFilter,
+                                        onResetChartFilters = viewModel::resetChartFilters,
                                         onSaveBudget = { category, limitPaise ->
                                             if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU &&
                                                 notificationPermissionStatus != "ALLOWED" &&

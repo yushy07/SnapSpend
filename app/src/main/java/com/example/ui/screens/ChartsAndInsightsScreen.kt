@@ -3,6 +3,7 @@ package com.example.ui.screens
 import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -16,6 +17,7 @@ import androidx.compose.foundation.layout.offset
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
@@ -23,12 +25,16 @@ import androidx.compose.material.icons.automirrored.filled.TrendingUp
 import androidx.compose.material.icons.filled.Autorenew
 import androidx.compose.material.icons.filled.Lightbulb
 import androidx.compose.material.icons.filled.Receipt
+import androidx.compose.material.icons.filled.Refresh
 import androidx.compose.material.icons.filled.Storefront
 import androidx.compose.material3.HorizontalDivider
+import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
+import androidx.compose.material3.minimumInteractiveComponentSize
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.saveable.rememberSaveable
@@ -36,12 +42,14 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.platform.LocalFocusManager
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import com.example.data.local.CategoryType
 import com.example.data.local.RepeatingState
 import com.example.ui.DateRangeFilter
 import com.example.ui.PaymentModeFilter
@@ -56,6 +64,7 @@ import com.example.ui.components.ResponsiveTabularNumberText
 import com.example.ui.components.SegmentedPillToggle
 import com.example.ui.components.TiltedRepeatingPaymentCard
 import com.example.ui.components.TinySectionLabel
+import com.example.ui.components.UnderlinedActionLink
 import com.example.ui.components.UppercaseScreenHeader
 import com.example.ui.components.WhitePillDropdown
 import com.example.ui.theme.CandyCardPalette
@@ -63,6 +72,7 @@ import com.example.ui.theme.CondensedCardTitleStyle
 import com.example.ui.theme.EditorialAqua
 import com.example.ui.theme.EditorialCoral
 import com.example.ui.theme.EditorialLavender
+import com.example.ui.theme.EditorialMint
 import com.example.ui.theme.EditorialPink
 import com.example.ui.theme.InkBlack
 import com.example.ui.theme.PaleAquaTint
@@ -92,6 +102,8 @@ fun ChartsAndInsightsScreen(
     onSaveBudget: (categoryName: String, limitPaise: Long) -> Unit,
     onRepeatingStateChange: (id: String, state: RepeatingState) -> Unit,
     onChartPaymentModeFilterChange: (PaymentModeFilter) -> Unit = {},
+    onChartCategoryFilterChange: (String?) -> Unit = {},
+    onResetChartFilters: () -> Unit = {},
     onSetBudgetClick: () -> Unit = {},
     onTransactionClick: (com.example.data.local.TransactionEntity) -> Unit = {},
     topContentPadding: Dp = 8.dp,
@@ -100,23 +112,35 @@ fun ChartsAndInsightsScreen(
 ) {
     val tokens = SnapSpendThemeTokens.colors
     val isDark = tokens.isDark
+    val focusManager = LocalFocusManager.current
+    val listState = rememberLazyListState()
 
     var activeSubTab by rememberSaveable { mutableStateOf(ChartsSubTab.OVERVIEW) }
-    var selectedCategoryDropdownLabel by rememberSaveable { mutableStateOf("All Categories") }
 
-    val availableCategoryNames = uiState.chartCategorySlices.map { it.categoryName }
-    val activeCategoryFilter = selectedCategoryDropdownLabel.takeIf {
-        it != "All Categories" && it in availableCategoryNames
+    val availableCategoryNames = uiState.availableChartCategories.ifEmpty {
+        (uiState.chartCategorySlices.map { it.categoryName } +
+            uiState.categories.filter { it.type == CategoryType.EXPENSE }.map { it.name }).distinct()
     }
-    val displayedCategorySlices = if (activeCategoryFilter != null) {
-        uiState.chartCategorySlices.filter { it.categoryName == activeCategoryFilter }
-    } else {
-        uiState.chartCategorySlices
-    }
+    val categoryOptions = listOf("All Categories") + availableCategoryNames
+    val activeCategoryFilter = uiState.chartCategoryFilter
+    val displayedCategorySlices = uiState.chartCategorySlices
+
+    val hasCustomChartFilter = uiState.chartDateRange != DateRangeFilter.THIS_MONTH ||
+        activeCategoryFilter != null ||
+        uiState.chartPaymentModeFilter != PaymentModeFilter.ALL
 
     val rangeSpentPaise = displayedCategorySlices.sumOf { it.amountPaise }
-        .takeIf { it > 0L || activeCategoryFilter != null || uiState.chartPaymentModeFilter != PaymentModeFilter.ALL }
-        ?: uiState.thisMonthSpentPaise
+
+    LaunchedEffect(
+        activeSubTab,
+        uiState.chartDateRange,
+        uiState.chartCategoryFilter,
+        uiState.chartPaymentModeFilter
+    ) {
+        if (listState.firstVisibleItemIndex > 0 || listState.firstVisibleItemScrollOffset > 0) {
+            listState.animateScrollToItem(0)
+        }
+    }
 
     val daysDivisor = when (uiState.chartDateRange) {
         DateRangeFilter.THIS_WEEK -> 7L
@@ -155,6 +179,7 @@ fun ChartsAndInsightsScreen(
     MarkScreenEntrancePlayedEffect(screenKey = screenEntranceKey)
 
     LazyColumn(
+        state = listState,
         modifier = modifier
             .fillMaxSize()
             .testTag("charts_screen_list"),
@@ -166,7 +191,7 @@ fun ChartsAndInsightsScreen(
         ),
         verticalArrangement = Arrangement.spacedBy(18.dp)
     ) {
-        // 1. Bold Uppercase Condensed Screen Title ("REVENUE") + White Pill Dropdowns + Sub-Tab Toggle
+        // 1. Bold Uppercase Condensed Screen Title ("SPENDING") + White Pill Dropdowns + Sub-Tab Toggle
         item(key = "charts_header") {
             Column(
                 modifier = Modifier.staggeredScreenEntrance(screenKey = screenEntranceKey, index = 0),
@@ -177,16 +202,34 @@ fun ChartsAndInsightsScreen(
                     leadingIcon = Icons.AutoMirrored.Filled.TrendingUp,
                     leadingIconBg = PureWhite,
                     leadingIconTint = InkBlack,
-                    titleColor = tokens.primaryText
+                    titleColor = tokens.primaryText,
+                    trailingContent = if (hasCustomChartFilter) {
+                        {
+                            UnderlinedActionLink(
+                                text = "Reset",
+                                onClick = {
+                                    focusManager.clearFocus()
+                                    onResetChartFilters()
+                                },
+                                testTag = "charts_reset_filters_link"
+                            )
+                        }
+                    } else null
                 )
 
-                // White 3D Pill Dropdowns with Chevrons ("This Week v", "All Categories v")
+                // White 3D Pill Dropdowns with Chevrons ("This Month v", "All Categories v")
                 Row(
                     modifier = Modifier.fillMaxWidth(),
                     horizontalArrangement = Arrangement.spacedBy(10.dp)
                 ) {
                     WhitePillDropdown(
                         label = uiState.chartDateRange.label,
+                        menuOptions = DateRangeFilter.entries.map { it.label },
+                        selectedOption = uiState.chartDateRange.label,
+                        onOptionSelected = { pickedLabel ->
+                            focusManager.clearFocus()
+                            DateRangeFilter.entries.firstOrNull { it.label == pickedLabel }?.let(onChartDateRangeChange)
+                        },
                         onClick = {
                             val entries = DateRangeFilter.entries
                             val nextIdx = (entries.indexOf(uiState.chartDateRange) + 1) % entries.size
@@ -198,10 +241,16 @@ fun ChartsAndInsightsScreen(
                     )
                     WhitePillDropdown(
                         label = activeCategoryFilter ?: "All Categories",
+                        menuOptions = categoryOptions,
+                        selectedOption = activeCategoryFilter ?: "All Categories",
+                        onOptionSelected = { pickedCategory ->
+                            focusManager.clearFocus()
+                            onChartCategoryFilterChange(pickedCategory.takeUnless { it == "All Categories" })
+                        },
                         onClick = {
-                            val options = listOf("All Categories") + availableCategoryNames
-                            val currentIdx = options.indexOf(activeCategoryFilter ?: "All Categories").coerceAtLeast(0)
-                            selectedCategoryDropdownLabel = options[(currentIdx + 1) % options.size]
+                            val currentIdx = categoryOptions.indexOf(activeCategoryFilter ?: "All Categories").coerceAtLeast(0)
+                            val nextLabel = categoryOptions[(currentIdx + 1) % categoryOptions.size]
+                            onChartCategoryFilterChange(nextLabel.takeUnless { it == "All Categories" })
                         },
                         modifier = Modifier.weight(1f),
                         fillWidth = true,
@@ -214,7 +263,10 @@ fun ChartsAndInsightsScreen(
                     options = PaymentModeFilter.entries,
                     selectedOption = uiState.chartPaymentModeFilter,
                     labelProvider = { it.label },
-                    onOptionSelected = onChartPaymentModeFilterChange,
+                    onOptionSelected = {
+                        focusManager.clearFocus()
+                        onChartPaymentModeFilterChange(it)
+                    },
                     optionTestTagProvider = { "charts_payment_mode_${it.name.lowercase()}" }
                 )
 
@@ -222,9 +274,97 @@ fun ChartsAndInsightsScreen(
                     options = ChartsSubTab.entries,
                     selectedOption = activeSubTab,
                     labelProvider = { it.label },
-                    onOptionSelected = { activeSubTab = it },
+                    onOptionSelected = {
+                        focusManager.clearFocus()
+                        activeSubTab = it
+                    },
                     optionTestTagProvider = { it.testTag }
                 )
+            }
+        }
+
+        if (hasCustomChartFilter && displayedCategorySlices.isEmpty() && rangeSpentPaise == 0L) {
+            item(key = "charts_empty_filter_banner") {
+                val emptyShape = RoundedCornerShape(26.dp)
+                Editorial3DLayerBox(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .testTag("charts_empty_filter_card"),
+                    shape = emptyShape,
+                    extrusionColor = InkBlack,
+                    extrusionBorderColor = InkBlack,
+                    depthX = 4.dp,
+                    depthY = 6.dp
+                ) {
+                    Surface(
+                        modifier = Modifier.fillMaxWidth(),
+                        shape = emptyShape,
+                        color = PaleMintTint,
+                        contentColor = InkBlack,
+                        border = BorderStroke(1.8.dp, InkBlack)
+                    ) {
+                        Column(
+                            modifier = Modifier.padding(20.dp),
+                            verticalArrangement = Arrangement.spacedBy(10.dp)
+                        ) {
+                            Text(
+                                text = "NO SPENDING FOR SELECTED FILTERS",
+                                style = CondensedCardTitleStyle.copy(fontSize = 22.sp),
+                                color = InkBlack
+                            )
+                            Text(
+                                text = buildString {
+                                    append("No payments found for ${uiState.chartDateRange.label}")
+                                    if (activeCategoryFilter != null) append(" · $activeCategoryFilter")
+                                    if (uiState.chartPaymentModeFilter != PaymentModeFilter.ALL) {
+                                        append(" · ${uiState.chartPaymentModeFilter.label}")
+                                    }
+                                    append(".")
+                                },
+                                style = MaterialTheme.typography.bodyMedium.copy(fontWeight = FontWeight.SemiBold),
+                                color = InkBlack.copy(alpha = 0.8f)
+                            )
+                            Editorial3DLayerBox(
+                                shape = CircleShape,
+                                extrusionColor = InkBlack,
+                                depthX = 2.5.dp,
+                                depthY = 3.5.dp
+                            ) {
+                                Surface(
+                                    onClick = {
+                                        focusManager.clearFocus()
+                                        onResetChartFilters()
+                                    },
+                                    modifier = Modifier
+                                        .minimumInteractiveComponentSize()
+                                        .testTag("reset_chart_filters_button"),
+                                    shape = CircleShape,
+                                    color = SunnyYellow,
+                                    contentColor = InkBlack,
+                                    border = BorderStroke(1.6.dp, InkBlack)
+                                ) {
+                                    Row(
+                                        modifier = Modifier.padding(horizontal = 16.dp, vertical = 10.dp),
+                                        verticalAlignment = Alignment.CenterVertically,
+                                        horizontalArrangement = Arrangement.spacedBy(8.dp)
+                                    ) {
+                                        Icon(
+                                            imageVector = Icons.Default.Refresh,
+                                            contentDescription = null,
+                                            tint = InkBlack,
+                                            modifier = Modifier.size(16.dp)
+                                        )
+                                        Text(
+                                            text = "RESET CHART FILTERS",
+                                            style = CondensedCardTitleStyle.copy(fontSize = 16.sp),
+                                            color = InkBlack
+                                        )
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
             }
         }
 
