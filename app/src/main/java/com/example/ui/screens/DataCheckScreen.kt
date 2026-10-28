@@ -26,8 +26,8 @@ import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
+import androidx.compose.material.icons.automirrored.filled.FactCheck
 import androidx.compose.material.icons.filled.ContentCopy
-import androidx.compose.material.icons.filled.FactCheck
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
@@ -698,7 +698,7 @@ fun DataCheckScreen(
                     contentAlignment = Alignment.Center
                 ) {
                     Icon(
-                        imageVector = Icons.Default.FactCheck,
+                        imageVector = Icons.AutoMirrored.Filled.FactCheck,
                         contentDescription = null,
                         tint = InkBlack,
                         modifier = Modifier.size(18.dp)

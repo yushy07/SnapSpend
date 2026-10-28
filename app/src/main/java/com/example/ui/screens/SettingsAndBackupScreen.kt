@@ -28,8 +28,8 @@ import androidx.compose.material.icons.filled.CloudDone
 import androidx.compose.material.icons.filled.CloudUpload
 import androidx.compose.material.icons.filled.Delete
 import androidx.compose.material.icons.filled.Download
+import androidx.compose.material.icons.automirrored.filled.FactCheck
 import androidx.compose.material.icons.filled.Edit
-import androidx.compose.material.icons.filled.FactCheck
 import androidx.compose.material.icons.filled.Layers
 import androidx.compose.material.icons.filled.MusicNote
 import androidx.compose.material.icons.filled.MusicOff
@@ -665,7 +665,7 @@ fun SettingsAndBackupScreen(
                                 contentAlignment = Alignment.Center
                             ) {
                                 Icon(
-                                    imageVector = Icons.Default.FactCheck,
+                                    imageVector = Icons.AutoMirrored.Filled.FactCheck,
                                     contentDescription = "Data Check",
                                     tint = InkBlack,
                                     modifier = Modifier.size(20.dp)

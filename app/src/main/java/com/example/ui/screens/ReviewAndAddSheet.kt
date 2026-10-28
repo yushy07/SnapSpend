@@ -2801,7 +2801,7 @@ fun TransactionEditorDialog(
                 verticalArrangement = Arrangement.spacedBy(10.dp)
             ) {
                 // Full Metadata Summary Card when inspecting an existing payment
-                if (isEditing && initialTransaction != null) {
+                if (initialTransaction != null && initialTransaction.id != 0L) {
                     Surface(
                         modifier = Modifier.fillMaxWidth(),
                         shape = RoundedCornerShape(18.dp),

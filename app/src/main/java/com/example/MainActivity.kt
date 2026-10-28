@@ -63,12 +63,12 @@ import androidx.compose.material.icons.filled.Add
 import androidx.compose.material.icons.filled.Folder
 import androidx.compose.material.icons.filled.Home
 import androidx.compose.material.icons.filled.PieChart
-import androidx.compose.material.icons.filled.ReceiptLong
+import androidx.compose.material.icons.automirrored.filled.ReceiptLong
+import androidx.compose.material.icons.automirrored.outlined.ReceiptLong
 import androidx.compose.material.icons.filled.Settings
 import androidx.compose.material.icons.outlined.Folder
 import androidx.compose.material.icons.outlined.Home
 import androidx.compose.material.icons.outlined.PieChart
-import androidx.compose.material.icons.outlined.ReceiptLong
 import androidx.compose.material.icons.outlined.Settings
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
@@ -194,7 +194,7 @@ enum class SnapSpendTab(
     HOME("Home", Icons.Filled.Home, Icons.Outlined.Home, SunnyYellow, "nav_tab_home"),
     CHARTS("Charts", Icons.Filled.PieChart, Icons.Outlined.PieChart, EditorialCoral, "nav_tab_charts"),
     CATEGORIES("Categories", Icons.Filled.Folder, Icons.Outlined.Folder, EditorialAqua, "nav_tab_categories"),
-    TRANSACTIONS("Transactions", Icons.Filled.ReceiptLong, Icons.Outlined.ReceiptLong, EditorialMint, "nav_tab_transactions"),
+    TRANSACTIONS("Transactions", Icons.AutoMirrored.Filled.ReceiptLong, Icons.AutoMirrored.Outlined.ReceiptLong, EditorialMint, "nav_tab_transactions"),
     SETTINGS("Settings", Icons.Filled.Settings, Icons.Outlined.Settings, EditorialLavender, "nav_tab_settings");
 
     val icon: ImageVector get() = selectedIcon
@@ -221,6 +221,7 @@ class MainActivity : ComponentActivity() {
             )
         )
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
+            @Suppress("DEPRECATION")
             window.isStatusBarContrastEnforced = false
             window.isNavigationBarContrastEnforced = false
         }
@@ -637,6 +638,7 @@ fun SnapSpendRootScreen(
             @Suppress("DEPRECATION")
             window.navigationBarColor = android.graphics.Color.TRANSPARENT
             if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
+                @Suppress("DEPRECATION")
                 window.isStatusBarContrastEnforced = false
                 window.isNavigationBarContrastEnforced = false
             }

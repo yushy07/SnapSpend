@@ -53,8 +53,8 @@ import androidx.compose.material.icons.filled.Info
 import androidx.compose.material.icons.filled.Lock
 import androidx.compose.material.icons.filled.Mic
 import androidx.compose.material.icons.filled.PhoneAndroid
+import androidx.compose.material.icons.automirrored.filled.ReceiptLong
 import androidx.compose.material.icons.filled.PhotoCamera
-import androidx.compose.material.icons.filled.ReceiptLong
 import androidx.compose.material.icons.filled.Restaurant
 import androidx.compose.material.icons.filled.Shield
 import androidx.compose.material.icons.filled.ShoppingBag
@@ -1465,7 +1465,7 @@ private fun Slide2AddScene(reducedMotion: Boolean) {
                     Slide2ActionStrip(
                         title = "PICK SCREENSHOTS",
                         subtitle = "Choose from your gallery",
-                        icon = Icons.Default.ReceiptLong,
+                        icon = Icons.AutoMirrored.Filled.ReceiptLong,
                         circleColor = Color(0xFFFFD43F),
                         stripBg = Color(0xFFFEEDAC)
                     )
