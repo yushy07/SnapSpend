@@ -46,7 +46,11 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import com.example.data.local.ScanLogEntry
+import com.example.data.local.ScanPath
 import com.example.data.local.TransactionEntity
+import com.example.ui.ScanLabItemResult
+import com.example.ui.ScanLabUiState
 import com.example.ui.components.Editorial3DLayerBox
 import com.example.ui.components.StatusPillBadge
 import com.example.ui.components.TinySectionLabel
@@ -70,6 +74,7 @@ import java.text.SimpleDateFormat
 import java.util.Calendar
 import java.util.Date
 import java.util.Locale
+import kotlin.math.roundToInt
 
 /**
  * Single month row in the Data Check "MONTH BY MONTH (last 12 months)" section.
@@ -98,7 +103,8 @@ data class DataCheckSnapshot(
     val cashActiveCount: Int = 0,
     val thisMonthSpentSqlPaise: Long = 0L,
     val monthlyRows: List<DataCheckMonthRow> = emptyList(),
-    val last10SavedRows: List<TransactionEntity> = emptyList()
+    val last10SavedRows: List<TransactionEntity> = emptyList(),
+    val scanTimingLogs: List<ScanLogEntry> = emptyList()
 ) {
     /**
      * Builds the complete plain-text diagnostic report for the COPY REPORT button.
@@ -153,6 +159,31 @@ data class DataCheckSnapshot(
                     )
                 }
             }
+            appendLine()
+            appendLine("5. SCAN TIMINGS (LAST 50 SCANS, LOCAL ONLY)")
+            if (scanTimingLogs.isEmpty()) {
+                appendLine("(No scan timings recorded yet)")
+            } else {
+                val totalScans = scanTimingLogs.size
+                val avgTimeMs = scanTimingLogs.map { it.totalMs }.average().roundToInt()
+                val avgTokens = scanTimingLogs.map { it.totalTokens }.average().roundToInt()
+                appendLine("Total logged scans: $totalScans")
+                appendLine("Average time per scan: ${avgTimeMs}ms")
+                appendLine("Average tokens per scan: $avgTokens")
+                val pathBreakdown = ScanPath.entries.joinToString(" | ") { path ->
+                    val count = scanTimingLogs.count { it.path == path }
+                    val pct = ((count.toDouble() / totalScans.toDouble()) * 100.0).roundToInt()
+                    "${path.name}: $pct% ($count)"
+                }
+                appendLine("Path breakdown: $pathBreakdown")
+                appendLine("Table (path | readMs | ocrMs | regexMs | textAiMs | visionMs | totalMs | retries | promptTok | outTok | filterTok):")
+                scanTimingLogs.forEachIndexed { idx, entry ->
+                    val filterTokStr = if (entry.preFilterTokens > 0) "${entry.preFilterTokens}->${entry.postFilterTokens}" else "-"
+                    appendLine(
+                        "#${idx + 1} | ${entry.path.name} | read=${entry.readFileMs}ms | ocr=${entry.ocrTextMs}ms | regex=${entry.regexMs}ms | textAi=${entry.geminiTextMs}ms | vision=${entry.visionFallbackMs}ms | total=${entry.totalMs}ms | retries=${entry.retries} | promptTok=${entry.promptTokens} | outTok=${entry.outputTokens} | filterTok=$filterTokStr"
+                    )
+                }
+            }
         }.trimEnd()
     }
 }
@@ -188,6 +219,10 @@ fun DataCheckScreen(
     homeThisMonthSpentPaise: Long,
     onBackClick: () -> Unit,
     onReportCopied: (String) -> Unit = {},
+    scanLabState: ScanLabUiState = ScanLabUiState(),
+    onPickScanLabFilesClick: () -> Unit = {},
+    onMarkScanLabVerdict: (String, Boolean) -> Unit = { _, _ -> },
+    onClearScanLab: () -> Unit = {},
     topContentPadding: Dp = 8.dp,
     bottomContentPadding: Dp = 120.dp,
     modifier: Modifier = Modifier
@@ -721,6 +756,483 @@ fun DataCheckScreen(
                     tx = tx,
                     formattedDateTime = exactTimestampFormatter.format(Date(tx.timestamp))
                 )
+            }
+        }
+
+        // Section 5: SCAN TIMINGS (Local-only telemetry, last 50 scans)
+        item(key = "data_check_scan_timings_card") {
+            ScanTimingsDiagnosticCard(logs = snapshot.scanTimingLogs)
+        }
+
+        // Section 6: SCAN LAB (Interactive pipeline tester for up to 20 files, zero DB writes)
+        item(key = "data_check_scan_lab_card") {
+            ScanLabDiagnosticCard(
+                scanLabState = scanLabState,
+                onPickScanLabFilesClick = onPickScanLabFilesClick,
+                onMarkScanLabVerdict = onMarkScanLabVerdict,
+                onClearScanLab = onClearScanLab
+            )
+        }
+    }
+}
+
+@Composable
+private fun ScanTimingsDiagnosticCard(
+    logs: List<ScanLogEntry>,
+    modifier: Modifier = Modifier
+) {
+    Editorial3DLayerBox(
+        modifier = modifier
+            .fillMaxWidth()
+            .testTag("data_check_scan_timings_card"),
+        shape = RoundedCornerShape(28.dp),
+        extrusionColor = InkBlack,
+        extrusionBorderColor = InkBlack,
+        depthX = 4.dp,
+        depthY = 6.dp
+    ) {
+        Surface(
+            modifier = Modifier.fillMaxWidth(),
+            shape = RoundedCornerShape(28.dp),
+            color = PaleAquaTint,
+            contentColor = InkBlack,
+            border = BorderStroke(1.8.dp, InkBlack)
+        ) {
+            Column(
+                modifier = Modifier.padding(20.dp),
+                verticalArrangement = Arrangement.spacedBy(12.dp)
+            ) {
+                TinySectionLabel(
+                    text = "SECTION 5 · LOCAL TELEMETRY (LAST 50 SCANS)",
+                    color = InkBlack.copy(alpha = 0.72f)
+                )
+                Text(
+                    text = "SCAN TIMINGS",
+                    style = CondensedCardTitleStyle.copy(fontSize = 26.sp),
+                    color = InkBlack
+                )
+                Text(
+                    text = "Zero receipt text, merchant names, or amounts are ever logged.",
+                    style = MaterialTheme.typography.bodySmall.copy(fontWeight = FontWeight.SemiBold),
+                    color = InkBlack.copy(alpha = 0.78f)
+                )
+
+                if (logs.isEmpty()) {
+                    Surface(
+                        shape = RoundedCornerShape(16.dp),
+                        color = PureWhite,
+                        contentColor = InkBlack,
+                        border = BorderStroke(1.5.dp, InkBlack),
+                        modifier = Modifier.fillMaxWidth()
+                    ) {
+                        Text(
+                            text = "No scans recorded yet. Scan a screenshot or PDF to inspect stage timings and token counts.",
+                            style = MaterialTheme.typography.bodyMedium.copy(fontWeight = FontWeight.Bold),
+                            color = InkBlack,
+                            modifier = Modifier.padding(16.dp)
+                        )
+                    }
+                } else {
+                    val totalScans = logs.size
+                    val avgTimeMs = logs.map { it.totalMs }.average().roundToInt()
+                    val avgTokens = logs.map { it.totalTokens }.average().roundToInt()
+
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.spacedBy(10.dp)
+                    ) {
+                        CountStatTile(
+                            label = "SCANS LOGGED",
+                            value = totalScans.toString(),
+                            bgColor = PureWhite,
+                            testTag = "scan_timings_total_count",
+                            modifier = Modifier.weight(1f)
+                        )
+                        CountStatTile(
+                            label = "AVG TIME",
+                            value = "${avgTimeMs}ms",
+                            bgColor = SunnyYellow,
+                            testTag = "scan_timings_avg_time",
+                            modifier = Modifier.weight(1f)
+                        )
+                        CountStatTile(
+                            label = "AVG TOKENS",
+                            value = avgTokens.toString(),
+                            bgColor = EditorialMint,
+                            testTag = "scan_timings_avg_tokens",
+                            modifier = Modifier.weight(1f)
+                        )
+                    }
+
+                    // Path percentages
+                    Surface(
+                        shape = RoundedCornerShape(16.dp),
+                        color = PureWhite,
+                        contentColor = InkBlack,
+                        border = BorderStroke(1.5.dp, InkBlack),
+                        modifier = Modifier.fillMaxWidth()
+                    ) {
+                        Column(
+                            modifier = Modifier.padding(12.dp),
+                            verticalArrangement = Arrangement.spacedBy(4.dp)
+                        ) {
+                            Text(
+                                text = "PATH BREAKDOWN (%)",
+                                style = MaterialTheme.typography.labelSmall.copy(fontWeight = FontWeight.ExtraBold),
+                                color = InkBlack.copy(alpha = 0.75f)
+                            )
+                            ScanPath.entries.forEach { path ->
+                                val count = logs.count { it.path == path }
+                                val pct = ((count.toDouble() / totalScans.toDouble()) * 100.0).roundToInt()
+                                Row(
+                                    modifier = Modifier.fillMaxWidth(),
+                                    horizontalArrangement = Arrangement.SpaceBetween
+                                ) {
+                                    Text(
+                                        text = path.name,
+                                        style = MaterialTheme.typography.bodySmall.copy(
+                                            fontFamily = FontFamily.Monospace,
+                                            fontWeight = FontWeight.ExtraBold
+                                        ),
+                                        color = InkBlack
+                                    )
+                                    Text(
+                                        text = "$pct% ($count)",
+                                        style = MaterialTheme.typography.bodySmall.copy(
+                                            fontFamily = FontFamily.Monospace,
+                                            fontWeight = FontWeight.Bold
+                                        ),
+                                        color = InkBlack
+                                    )
+                                }
+                            }
+                        }
+                    }
+
+                    // Table of recent scans
+                    Surface(
+                        shape = RoundedCornerShape(16.dp),
+                        color = PureWhite,
+                        contentColor = InkBlack,
+                        border = BorderStroke(1.5.dp, InkBlack),
+                        modifier = Modifier.fillMaxWidth()
+                    ) {
+                        Column(
+                            modifier = Modifier.padding(12.dp),
+                            verticalArrangement = Arrangement.spacedBy(6.dp)
+                        ) {
+                            Text(
+                                text = "STAGE TIMINGS TABLE (READ / OCR / REGEX / AI / VISION / TOTAL · TOKENS)",
+                                style = MaterialTheme.typography.labelSmall.copy(fontWeight = FontWeight.ExtraBold),
+                                color = InkBlack.copy(alpha = 0.75f)
+                            )
+                            logs.take(20).forEachIndexed { idx, entry ->
+                                if (idx > 0) {
+                                    HorizontalDivider(thickness = 1.dp, color = InkBlack.copy(alpha = 0.12f))
+                                }
+                                Column(verticalArrangement = Arrangement.spacedBy(2.dp)) {
+                                    Row(
+                                        modifier = Modifier.fillMaxWidth(),
+                                        horizontalArrangement = Arrangement.SpaceBetween,
+                                        verticalAlignment = Alignment.CenterVertically
+                                    ) {
+                                        Text(
+                                            text = "#${idx + 1} · ${entry.path.name}",
+                                            style = MaterialTheme.typography.bodySmall.copy(
+                                                fontFamily = FontFamily.Monospace,
+                                                fontWeight = FontWeight.ExtraBold
+                                            ),
+                                            color = InkBlack
+                                        )
+                                        Text(
+                                            text = "${entry.totalMs}ms · ${entry.totalTokens} tok (r=${entry.retries})",
+                                            style = MaterialTheme.typography.bodySmall.copy(
+                                                fontFamily = FontFamily.Monospace,
+                                                fontWeight = FontWeight.Bold
+                                            ),
+                                            color = InkBlack
+                                        )
+                                    }
+                                    val filterSummary = if (entry.preFilterTokens > 0) {
+                                        " | filter:${entry.preFilterTokens}->${entry.postFilterTokens}"
+                                    } else {
+                                        ""
+                                    }
+                                    Text(
+                                        text = "read:${entry.readFileMs}ms | ocr:${entry.ocrTextMs}ms | rgx:${entry.regexMs}ms | ai:${entry.geminiTextMs}ms | vis:${entry.visionFallbackMs}ms | in:${entry.promptTokens}/out:${entry.outputTokens}$filterSummary",
+                                        style = MaterialTheme.typography.labelSmall.copy(
+                                            fontFamily = FontFamily.Monospace,
+                                            fontSize = 10.sp
+                                        ),
+                                        color = InkBlack.copy(alpha = 0.78f)
+                                    )
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+}
+
+@Composable
+private fun ScanLabDiagnosticCard(
+    scanLabState: ScanLabUiState,
+    onPickScanLabFilesClick: () -> Unit,
+    onMarkScanLabVerdict: (String, Boolean) -> Unit,
+    onClearScanLab: () -> Unit,
+    modifier: Modifier = Modifier
+) {
+    val view = LocalView.current
+    Editorial3DLayerBox(
+        modifier = modifier
+            .fillMaxWidth()
+            .testTag("data_check_scan_lab_card"),
+        shape = RoundedCornerShape(28.dp),
+        extrusionColor = InkBlack,
+        extrusionBorderColor = InkBlack,
+        depthX = 4.dp,
+        depthY = 6.dp
+    ) {
+        Surface(
+            modifier = Modifier.fillMaxWidth(),
+            shape = RoundedCornerShape(28.dp),
+            color = PaleLavenderTint,
+            contentColor = InkBlack,
+            border = BorderStroke(1.8.dp, InkBlack)
+        ) {
+            Column(
+                modifier = Modifier.padding(20.dp),
+                verticalArrangement = Arrangement.spacedBy(12.dp)
+            ) {
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.SpaceBetween,
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    Column(modifier = Modifier.weight(1f)) {
+                        TinySectionLabel(
+                            text = "SECTION 6 · BENCHMARK UP TO 20 FILES",
+                            color = InkBlack.copy(alpha = 0.72f)
+                        )
+                        Text(
+                            text = "SCAN LAB",
+                            style = CondensedCardTitleStyle.copy(fontSize = 26.sp),
+                            color = InkBlack
+                        )
+                    }
+                    Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                        if (scanLabState.items.isNotEmpty() && !scanLabState.isRunning) {
+                            Surface(
+                                onClick = {
+                                    Motion.performLightTapHaptic(view)
+                                    onClearScanLab()
+                                },
+                                shape = CircleShape,
+                                color = PureWhite,
+                                contentColor = InkBlack,
+                                border = BorderStroke(1.5.dp, InkBlack),
+                                modifier = Modifier.minimumInteractiveComponentSize()
+                            ) {
+                                Text(
+                                    text = "CLEAR",
+                                    style = MaterialTheme.typography.labelMedium.copy(fontWeight = FontWeight.ExtraBold),
+                                    color = InkBlack,
+                                    modifier = Modifier.padding(horizontal = 14.dp, vertical = 10.dp)
+                                )
+                            }
+                        }
+                        Editorial3DLayerBox(
+                            shape = CircleShape,
+                            extrusionColor = InkBlack,
+                            extrusionBorderColor = InkBlack,
+                            depthX = 2.dp,
+                            depthY = 3.dp
+                        ) {
+                            Surface(
+                                onClick = {
+                                    if (!scanLabState.isRunning) {
+                                        Motion.performLightTapHaptic(view)
+                                        onPickScanLabFilesClick()
+                                    }
+                                },
+                                shape = CircleShape,
+                                color = SunnyYellow,
+                                contentColor = InkBlack,
+                                border = BorderStroke(1.8.dp, InkBlack),
+                                modifier = Modifier
+                                    .minimumInteractiveComponentSize()
+                                    .testTag("scan_lab_pick_button")
+                            ) {
+                                Text(
+                                    text = if (scanLabState.isRunning) {
+                                        "RUNNING ${scanLabState.processedCount}/${scanLabState.totalCount}..."
+                                    } else {
+                                        "SCAN LAB"
+                                    },
+                                    style = MaterialTheme.typography.labelLarge.copy(fontWeight = FontWeight.ExtraBold),
+                                    color = InkBlack,
+                                    modifier = Modifier.padding(horizontal = 16.dp, vertical = 10.dp)
+                                )
+                            }
+                        }
+                    }
+                }
+
+                Text(
+                    text = "Pick up to 20 screenshots or PDFs to test the real pipeline. Nothing is saved to transactions and files are never copied.",
+                    style = MaterialTheme.typography.bodySmall.copy(fontWeight = FontWeight.SemiBold),
+                    color = InkBlack.copy(alpha = 0.78f)
+                )
+
+                if (scanLabState.items.isNotEmpty()) {
+                    scanLabState.items.forEach { item ->
+                        ScanLabItemRowCard(
+                            item = item,
+                            onMarkVerdict = { isCorrect ->
+                                onMarkScanLabVerdict(item.id, isCorrect)
+                            }
+                        )
+                    }
+
+                    // Summary footer: percent correct, average time, average tokens
+                    val pctCorrect = scanLabState.percentCorrect
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.spacedBy(10.dp)
+                    ) {
+                        CountStatTile(
+                            label = "PERCENT CORRECT",
+                            value = if (pctCorrect != null) "$pctCorrect%" else "—",
+                            bgColor = EditorialMint,
+                            testTag = "scan_lab_percent_correct",
+                            modifier = Modifier.weight(1f)
+                        )
+                        CountStatTile(
+                            label = "AVG TIME",
+                            value = "${scanLabState.averageTimeMs}ms",
+                            bgColor = SunnyYellow,
+                            testTag = "scan_lab_avg_time",
+                            modifier = Modifier.weight(1f)
+                        )
+                        CountStatTile(
+                            label = "AVG TOKENS",
+                            value = scanLabState.averageTokens.toString(),
+                            bgColor = PureWhite,
+                            testTag = "scan_lab_avg_tokens",
+                            modifier = Modifier.weight(1f)
+                        )
+                    }
+                }
+            }
+        }
+    }
+}
+
+@Composable
+private fun ScanLabItemRowCard(
+    item: ScanLabItemResult,
+    onMarkVerdict: (Boolean) -> Unit
+) {
+    val view = LocalView.current
+    Surface(
+        shape = RoundedCornerShape(18.dp),
+        color = PureWhite,
+        contentColor = InkBlack,
+        border = BorderStroke(1.5.dp, InkBlack),
+        modifier = Modifier.fillMaxWidth()
+    ) {
+        Column(
+            modifier = Modifier.padding(14.dp),
+            verticalArrangement = Arrangement.spacedBy(8.dp)
+        ) {
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.SpaceBetween,
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                Text(
+                    text = item.fileName,
+                    style = MaterialTheme.typography.labelLarge.copy(fontWeight = FontWeight.ExtraBold),
+                    color = InkBlack,
+                    modifier = Modifier.weight(1f)
+                )
+                StatusPillBadge(
+                    text = "${item.path.name} · ${item.totalMs}ms · ${item.totalTokens} tok",
+                    backgroundColor = EditorialAqua
+                )
+            }
+
+            if (item.errorMessage != null) {
+                Text(
+                    text = "Error: ${item.errorMessage}",
+                    style = MaterialTheme.typography.bodySmall.copy(fontWeight = FontWeight.Bold),
+                    color = EditorialCoral
+                )
+            } else {
+                Text(
+                    text = "${item.merchant} · ${MoneyUtils.formatExactPaise(item.amountPaise)} · ${item.dateFormatted} · ${item.category}",
+                    style = MaterialTheme.typography.bodyMedium.copy(fontWeight = FontWeight.ExtraBold),
+                    color = InkBlack
+                )
+            }
+
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.spacedBy(10.dp),
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                Surface(
+                    onClick = {
+                        Motion.performLightTapHaptic(view)
+                        onMarkVerdict(true)
+                    },
+                    shape = CircleShape,
+                    color = if (item.isCorrect == true) EditorialMint else PureWhite,
+                    contentColor = InkBlack,
+                    border = BorderStroke(1.5.dp, InkBlack),
+                    modifier = Modifier
+                        .weight(1f)
+                        .minimumInteractiveComponentSize()
+                        .testTag("scan_lab_correct_${item.id}")
+                ) {
+                    Box(
+                        contentAlignment = Alignment.Center,
+                        modifier = Modifier.padding(vertical = 8.dp)
+                    ) {
+                        Text(
+                            text = if (item.isCorrect == true) "✓ CORRECT" else "CORRECT",
+                            style = MaterialTheme.typography.labelMedium.copy(fontWeight = FontWeight.ExtraBold),
+                            color = InkBlack
+                        )
+                    }
+                }
+                Surface(
+                    onClick = {
+                        Motion.performLightTapHaptic(view)
+                        onMarkVerdict(false)
+                    },
+                    shape = CircleShape,
+                    color = if (item.isCorrect == false) EditorialCoral else PureWhite,
+                    contentColor = InkBlack,
+                    border = BorderStroke(1.5.dp, InkBlack),
+                    modifier = Modifier
+                        .weight(1f)
+                        .minimumInteractiveComponentSize()
+                        .testTag("scan_lab_wrong_${item.id}")
+                ) {
+                    Box(
+                        contentAlignment = Alignment.Center,
+                        modifier = Modifier.padding(vertical = 8.dp)
+                    ) {
+                        Text(
+                            text = if (item.isCorrect == false) "✗ WRONG" else "WRONG",
+                            style = MaterialTheme.typography.labelMedium.copy(fontWeight = FontWeight.ExtraBold),
+                            color = InkBlack
+                        )
+                    }
+                }
             }
         }
     }

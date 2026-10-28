@@ -755,7 +755,10 @@ fun applyQuickAmountToCashNote(currentNote: String, addRupees: Int): String {
 @Composable
 fun SmartCashLogDialog(
     onDismiss: () -> Unit,
-    onSubmitCashNote: (String, TransactionType) -> Unit
+    onSubmitCashNote: (String, TransactionType) -> Unit,
+    currentCashInHandPaise: Long = 0L,
+    onSetWalletBalancePaise: (Long) -> Unit = {},
+    onTopUpWalletPaise: (Long, Boolean) -> Unit = { _, _ -> }
 ) {
     val tokens = SnapSpendThemeTokens.colors
     val isDark = tokens.isDark
@@ -766,6 +769,12 @@ fun SmartCashLogDialog(
     var noteText by remember { mutableStateOf("") }
     var selectedCashType by remember { mutableStateOf(TransactionType.EXPENSE) }
     var voiceStatusHint by remember { mutableStateOf<String?>(null) }
+    var showAdjustWalletSection by remember { mutableStateOf(false) }
+    var manualWalletInput by remember(currentCashInHandPaise) {
+        mutableStateOf(
+            if (currentCashInHandPaise > 0L) MoneyUtils.paiseToEditableRupeeString(currentCashInHandPaise) else ""
+        )
+    }
 
     val speechLauncher = rememberLauncherForActivityResult(
         contract = ActivityResultContracts.StartActivityForResult()
@@ -861,13 +870,135 @@ fun SmartCashLogDialog(
                     .verticalScroll(rememberScrollState()),
                 verticalArrangement = Arrangement.spacedBy(12.dp)
             ) {
+                // Cash in Hand Wallet Banner + Quick Top-Up / Set Balance
+                Surface(
+                    shape = RoundedCornerShape(18.dp),
+                    color = SunnyYellow,
+                    border = BorderStroke(2.dp, BrightCardBlack),
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .testTag("smart_cash_wallet_banner")
+                ) {
+                    Column(
+                        modifier = Modifier.padding(12.dp),
+                        verticalArrangement = Arrangement.spacedBy(8.dp)
+                    ) {
+                        Row(
+                            modifier = Modifier.fillMaxWidth(),
+                            horizontalArrangement = Arrangement.SpaceBetween,
+                            verticalAlignment = Alignment.CenterVertically
+                        ) {
+                            Column {
+                                Text(
+                                    text = "CASH IN HAND WALLET",
+                                    style = MaterialTheme.typography.labelSmall.copy(fontWeight = FontWeight.Black),
+                                    color = BrightCardBlack.copy(alpha = 0.75f)
+                                )
+                                Text(
+                                    text = MoneyUtils.formatPaise(currentCashInHandPaise),
+                                    style = CondensedCardTitleStyle.copy(fontSize = 24.sp),
+                                    color = BrightCardBlack
+                                )
+                            }
+                            Surface(
+                                onClick = {
+                                    Motion.performLightTapHaptic(view)
+                                    showAdjustWalletSection = !showAdjustWalletSection
+                                },
+                                shape = CircleShape,
+                                color = PureWhite,
+                                border = BorderStroke(1.5.dp, BrightCardBlack),
+                                modifier = Modifier.testTag("smart_cash_adjust_wallet_toggle")
+                            ) {
+                                Text(
+                                    text = if (showAdjustWalletSection) "Hide Adjust" else "Adjust / Top-up",
+                                    modifier = Modifier.padding(horizontal = 12.dp, vertical = 6.dp),
+                                    style = MaterialTheme.typography.labelSmall.copy(fontWeight = FontWeight.Black),
+                                    color = BrightCardBlack
+                                )
+                            }
+                        }
+
+                        if (showAdjustWalletSection) {
+                            Row(
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .horizontalScroll(rememberScrollState()),
+                                horizontalArrangement = Arrangement.spacedBy(6.dp)
+                            ) {
+                                listOf(100L to "+₹100", 500L to "+₹500", 2000L to "+₹2000 ATM").forEach { (rupees, label) ->
+                                    Surface(
+                                        onClick = {
+                                            Motion.performLightTapHaptic(view)
+                                            soundManager?.playCoin()
+                                            onTopUpWalletPaise(rupees * 100L, rupees >= 500L)
+                                        },
+                                        shape = CircleShape,
+                                        color = PureWhite,
+                                        border = BorderStroke(1.5.dp, BrightCardBlack),
+                                        modifier = Modifier.testTag("wallet_topup_${rupees}")
+                                    ) {
+                                        Text(
+                                            text = label,
+                                            modifier = Modifier.padding(horizontal = 10.dp, vertical = 6.dp),
+                                            style = MaterialTheme.typography.labelSmall.copy(fontWeight = FontWeight.Black),
+                                            color = BrightCardBlack
+                                        )
+                                    }
+                                }
+                            }
+
+                            Row(
+                                modifier = Modifier.fillMaxWidth(),
+                                horizontalArrangement = Arrangement.spacedBy(8.dp),
+                                verticalAlignment = Alignment.CenterVertically
+                            ) {
+                                OutlinedTextField(
+                                    value = manualWalletInput,
+                                    onValueChange = { manualWalletInput = it },
+                                    label = { Text("Set exact ₹ in hand", color = BrightCardBlack.copy(alpha = 0.8f)) },
+                                    singleLine = true,
+                                    keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Decimal),
+                                    colors = OutlinedTextFieldDefaults.colors(
+                                        focusedContainerColor = PureWhite,
+                                        unfocusedContainerColor = PureWhite,
+                                        focusedBorderColor = BrightCardBlack,
+                                        unfocusedBorderColor = BrightCardBlack,
+                                        focusedTextColor = BrightCardBlack,
+                                        unfocusedTextColor = BrightCardBlack
+                                    ),
+                                    modifier = Modifier
+                                        .weight(1f)
+                                        .testTag("smart_cash_set_balance_input")
+                                )
+                                Button(
+                                    onClick = {
+                                        val paise = MoneyUtils.parseRupeesToPaise(manualWalletInput) ?: 0L
+                                        soundManager?.playCoin()
+                                        onSetWalletBalancePaise(paise)
+                                        showAdjustWalletSection = false
+                                    },
+                                    shape = CircleShape,
+                                    colors = ButtonDefaults.buttonColors(
+                                        containerColor = BrightCardBlack,
+                                        contentColor = PureWhite
+                                    ),
+                                    modifier = Modifier.testTag("smart_cash_set_balance_button")
+                                ) {
+                                    Text("Set ₹", fontWeight = FontWeight.Black, color = PureWhite)
+                                }
+                            }
+                        }
+                    }
+                }
+
                 OutlinedTextField(
                     value = noteText,
                     onValueChange = { noteText = it },
-                    label = { Text("Rough cash note (single or multi-item)", color = tokens.secondaryText) },
+                    label = { Text("Quick Cash note (single or multi-item)", color = tokens.secondaryText) },
                     placeholder = {
                         Text(
-                            "40 momos near station, or auto 60, samosa 30",
+                            "20 chai, 50 auto, 140 maggi",
                             color = tokens.secondaryText.copy(alpha = 0.7f)
                         )
                     },
@@ -1110,13 +1241,16 @@ fun AiReviewDeckOverlay(
     scanState: ScanUiState,
     categories: List<CategoryEntity>,
     onDismiss: () -> Unit,
+    onCancelScan: () -> Unit = onDismiss,
     onRetry: () -> Unit,
+    onRetryFailedUris: (List<android.net.Uri>) -> Unit = {},
     onQueueFailedScan: () -> Unit = {},
     onPickAnotherImage: () -> Unit,
     onUpdateDraft: (DraftTransaction, Boolean) -> Unit,
     onToggleSkip: (String) -> Unit,
     onApplyEqualSplit: (String, Int) -> Unit,
     onToggleLineItem: (String, Int) -> Unit,
+    onConfirmAllVerified: () -> Unit = {},
     onConfirmAll: () -> Unit
 ) {
     BackHandler { onDismiss() }
@@ -1317,16 +1451,27 @@ fun AiReviewDeckOverlay(
                                         }
 
                                         Text(
-                                            text = scanState.statusText,
+                                            text = "${scanState.statusText} (${scanState.elapsedSeconds}s...)",
                                             style = MaterialTheme.typography.bodyMedium.copy(fontWeight = FontWeight.Bold),
                                             color = BrightCardBlack.copy(alpha = 0.78f),
                                             textAlign = TextAlign.Center
                                         )
 
-                                        StatusPillBadge(
-                                            text = "Step ${scanState.currentStep} of ${scanState.totalSteps} · Parallel AI Scan",
-                                            backgroundColor = PureWhite
-                                        )
+                                        Row(
+                                            horizontalArrangement = Arrangement.spacedBy(10.dp),
+                                            verticalAlignment = Alignment.CenterVertically
+                                        ) {
+                                            StatusPillBadge(
+                                                text = "Step ${scanState.currentStep} of ${scanState.totalSteps} · ${scanState.elapsedSeconds}s...",
+                                                backgroundColor = PureWhite
+                                            )
+                                            WhitePillChip(
+                                                label = "CANCEL",
+                                                selected = false,
+                                                onClick = onCancelScan,
+                                                testTag = "reading_cancel_scan_button"
+                                            )
+                                        }
                                     }
                                 }
                             }
@@ -1491,6 +1636,8 @@ fun AiReviewDeckOverlay(
                 is ScanUiState.ReviewReady -> {
                     val drafts = scanState.drafts
                     val activeCount = drafts.count { !it.isSkipped }
+                    val verifiedCount = drafts.count { !it.isSkipped && it.isVerified }
+                    val toCheckCount = drafts.count { !it.isSkipped && !it.isVerified }
                     val reducedMotion = LocalReducedMotion.current
                     val view = LocalView.current
                     val coroutineScope = rememberCoroutineScope()
@@ -1505,24 +1652,80 @@ fun AiReviewDeckOverlay(
                         verticalArrangement = Arrangement.spacedBy(16.dp)
                     ) {
                         item {
-                            Column {
+                            Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                                Row(
+                                    modifier = Modifier.fillMaxWidth(),
+                                    horizontalArrangement = Arrangement.SpaceBetween,
+                                    verticalAlignment = Alignment.CenterVertically
+                                ) {
+                                    Text(
+                                        text = "Check & confirm",
+                                        style = if (isDark) MaterialTheme.typography.headlineLarge else MaterialTheme.typography.displayMedium,
+                                        color = tokens.primaryText
+                                    )
+                                    Surface(
+                                        shape = CircleShape,
+                                        color = if (toCheckCount == 0) EditorialMint else SunnyYellow,
+                                        contentColor = InkBlack,
+                                        border = BorderStroke(1.6.dp, InkBlack),
+                                        modifier = Modifier.testTag("review_verified_summary_pill")
+                                    ) {
+                                        Text(
+                                            text = "$verifiedCount verified · $toCheckCount to check",
+                                            style = MaterialTheme.typography.labelMedium.copy(fontWeight = FontWeight.ExtraBold),
+                                            color = InkBlack,
+                                            modifier = Modifier.padding(horizontal = 12.dp, vertical = 6.dp)
+                                        )
+                                    }
+                                }
                                 Text(
-                                    text = "Check & confirm",
-                                    style = if (isDark) MaterialTheme.typography.headlineLarge else MaterialTheme.typography.displayMedium,
-                                    color = tokens.primaryText
-                                )
-                                Spacer(modifier = Modifier.height(4.dp))
-                                Text(
-                                    text = "Tap any card to edit details, or split bills and itemized receipts right on the card.",
+                                    text = "Flagged cards are sorted first. Tap any card to edit details, or confirm verified items in one tap.",
                                     style = MaterialTheme.typography.bodyMedium.copy(fontWeight = FontWeight.SemiBold),
                                     color = tokens.secondaryText
                                 )
                             }
                         }
 
+                        if (scanState.failedUris.isNotEmpty()) {
+                            item(key = "failed_batch_uris_retry_card") {
+                                Surface(
+                                    modifier = Modifier
+                                        .fillMaxWidth()
+                                        .testTag("failed_batch_files_card"),
+                                    shape = RoundedCornerShape(22.dp),
+                                    color = EditorialCoral,
+                                    contentColor = InkBlack,
+                                    border = BorderStroke(1.8.dp, InkBlack)
+                                ) {
+                                    Row(
+                                        modifier = Modifier
+                                            .fillMaxWidth()
+                                            .padding(horizontal = 16.dp, vertical = 12.dp),
+                                        horizontalArrangement = Arrangement.SpaceBetween,
+                                        verticalAlignment = Alignment.CenterVertically
+                                    ) {
+                                        Text(
+                                            text = "${scanState.failedUris.size} file${if (scanState.failedUris.size == 1) "" else "s"} couldn't be read",
+                                            style = MaterialTheme.typography.bodyMedium.copy(fontWeight = FontWeight.ExtraBold),
+                                            color = InkBlack,
+                                            modifier = Modifier.weight(1f)
+                                        )
+                                        Spacer(modifier = Modifier.width(10.dp))
+                                        WhitePillChip(
+                                            label = "RETRY",
+                                            selected = true,
+                                            leadingIcon = Icons.Default.Refresh,
+                                            onClick = { onRetryFailedUris(scanState.failedUris) },
+                                            testTag = "retry_failed_batch_files_button"
+                                        )
+                                    }
+                                }
+                            }
+                        }
+
                         itemsIndexed(drafts, key = { _, d -> d.draftId }) { idx, draft ->
                             val baseColor = when {
-                                draft.isLowConfidence -> if (isDark) CandySunshineYellow else WarningAmber
+                                !draft.isVerified -> if (isDark) CandySunshineYellow else WarningAmber
                                 draft.resolutionMode == ResolutionMode.UPDATE_PENDING_TO_FINAL -> if (isDark) CandyLimeGreen else LimeAccent
                                 draft.isSkipped -> if (isDark) CandySkyBlue else PastelBeige
                                 else -> palette[idx % palette.size]
@@ -1563,14 +1766,67 @@ fun AiReviewDeckOverlay(
                                                 horizontalArrangement = Arrangement.spacedBy(6.dp),
                                                 verticalAlignment = Alignment.CenterVertically
                                             ) {
-                                                StatusPillBadge(
-                                                    text = "Gemini Parsed · ${draft.source.name}",
-                                                    backgroundColor = PureWhite
-                                                )
-                                                if (draft.paymentMode.equals("CASH", ignoreCase = true)) {
+                                                // Green VERIFIED pill ONLY when all local checks pass
+                                                if (draft.isVerified) {
+                                                    StatusPillBadge(
+                                                        text = "VERIFIED",
+                                                        backgroundColor = EditorialMint
+                                                    )
+                                                }
+                                                if (!draft.dateFound) {
+                                                    Surface(
+                                                        onClick = { editingDraft = draft },
+                                                        shape = CircleShape,
+                                                        color = EditorialCoral,
+                                                        border = BorderStroke(1.4.dp, BrightCardBlack),
+                                                        modifier = Modifier.testTag("review_date_not_found_chip_$idx")
+                                                    ) {
+                                                        Text(
+                                                            text = "DATE NOT FOUND · TAP TO SET",
+                                                            style = MaterialTheme.typography.labelSmall.copy(fontWeight = FontWeight.Black),
+                                                            color = BrightCardBlack,
+                                                            modifier = Modifier.padding(horizontal = 10.dp, vertical = 4.dp)
+                                                        )
+                                                    }
+                                                }
+                                                if (!draft.amountVerified) {
+                                                    StatusPillBadge(
+                                                        text = "CHECK AMOUNT",
+                                                        backgroundColor = EditorialCoral
+                                                    )
+                                                }
+                                                if (draft.dateSuspicious) {
+                                                    StatusPillBadge(
+                                                        text = "CHECK DATE",
+                                                        backgroundColor = EditorialCoral
+                                                    )
+                                                }
+                                                if (draft.isCardBillCheck) {
+                                                    StatusPillBadge(
+                                                        text = "CARD BILL · CHECK",
+                                                        backgroundColor = EditorialCoral
+                                                    )
+                                                }
+                                                if (!draft.missingRowsWarning.isNullOrBlank()) {
+                                                    StatusPillBadge(
+                                                        text = "SOME ROWS MAY BE MISSING",
+                                                        backgroundColor = EditorialCoral
+                                                    )
+                                                }
+                                                if (draft.isAtmWithdrawal) {
+                                                    StatusPillBadge(
+                                                        text = "[ATM WDL]",
+                                                        backgroundColor = EditorialMint
+                                                    )
+                                                } else if (draft.paymentMode.equals("CASH", ignoreCase = true)) {
                                                     StatusPillBadge(
                                                         text = "[CASH]",
                                                         backgroundColor = SunnyYellow
+                                                    )
+                                                } else {
+                                                    StatusPillBadge(
+                                                        text = "[UPI / ONLINE]",
+                                                        backgroundColor = EditorialAqua
                                                     )
                                                 }
                                                 if (draft.isLowConfidence) {
@@ -1782,6 +2038,156 @@ fun AiReviewDeckOverlay(
                                             )
                                         }
 
+                                        Spacer(modifier = Modifier.height(6.dp))
+
+                                        // 1-Tap ATM Withdrawal Toggle (Prevents double-counting in Spent & adds to Cash Wallet)
+                                        Row(
+                                            modifier = Modifier.fillMaxWidth(),
+                                            horizontalArrangement = Arrangement.SpaceBetween,
+                                            verticalAlignment = Alignment.CenterVertically
+                                        ) {
+                                            Text(
+                                                text = "ATM cash withdrawal:",
+                                                style = MaterialTheme.typography.labelMedium.copy(fontWeight = FontWeight.Bold),
+                                                color = BrightCardBlack
+                                            )
+                                            WhitePillChip(
+                                                label = if (draft.isAtmWithdrawal) "ATM Withdrawal ✓ (Adds to Cash)" else "Mark as ATM Withdrawal",
+                                                selected = draft.isAtmWithdrawal,
+                                                onClick = {
+                                                    val nextAtm = !draft.isAtmWithdrawal
+                                                    onUpdateDraft(
+                                                        draft.copy(
+                                                            isAtmWithdrawal = nextAtm,
+                                                            paymentMode = if (nextAtm) "CASH" else draft.paymentMode
+                                                        ),
+                                                        false
+                                                    )
+                                                },
+                                                testTag = "review_card_${idx}_atm_toggle"
+                                            )
+                                        }
+
+                                        // Inline CHECK AMOUNT resolution (when AI amount differs from on-device regex amount)
+                                        if (!draft.amountVerified) {
+                                            Spacer(modifier = Modifier.height(8.dp))
+                                            Surface(
+                                                modifier = Modifier.fillMaxWidth(),
+                                                shape = RoundedCornerShape(16.dp),
+                                                color = EditorialCoral.copy(alpha = 0.25f),
+                                                border = BorderStroke(1.4.dp, BrightCardBlack)
+                                            ) {
+                                                Column(
+                                                    modifier = Modifier.padding(10.dp),
+                                                    verticalArrangement = Arrangement.spacedBy(6.dp)
+                                                ) {
+                                                    Text(
+                                                        text = "Verify amount against receipt text:",
+                                                        style = MaterialTheme.typography.labelSmall.copy(fontWeight = FontWeight.Black),
+                                                        color = BrightCardBlack
+                                                    )
+                                                    Row(
+                                                        horizontalArrangement = Arrangement.spacedBy(8.dp),
+                                                        verticalAlignment = Alignment.CenterVertically
+                                                    ) {
+                                                        WhitePillChip(
+                                                            label = "Keep ${MoneyUtils.formatPaise(draft.amountPaise)}",
+                                                            selected = true,
+                                                            onClick = {
+                                                                onUpdateDraft(
+                                                                    draft.copy(amountVerified = true),
+                                                                    false
+                                                                )
+                                                            }
+                                                        )
+                                                        val regexSuggested = draft.regexSuggestedAmountPaise
+                                                        if (regexSuggested != null && regexSuggested > 0L && regexSuggested != draft.amountPaise) {
+                                                            WhitePillChip(
+                                                                label = "Use ${MoneyUtils.formatPaise(regexSuggested)}",
+                                                                selected = false,
+                                                                onClick = {
+                                                                    onUpdateDraft(
+                                                                        draft.copy(
+                                                                            amountPaise = regexSuggested,
+                                                                            originalAmountPaise = regexSuggested,
+                                                                            amountVerified = true
+                                                                        ),
+                                                                        false
+                                                                    )
+                                                                }
+                                                            )
+                                                        }
+                                                    }
+                                                }
+                                            }
+                                        }
+
+                                        // Inline CARD BILL · CHECK toggle (Transfer vs Expense)
+                                        if (draft.isCardBillCheck) {
+                                            Spacer(modifier = Modifier.height(8.dp))
+                                            Surface(
+                                                modifier = Modifier.fillMaxWidth(),
+                                                shape = RoundedCornerShape(16.dp),
+                                                color = PureWhite.copy(alpha = 0.9f),
+                                                border = BorderStroke(1.4.dp, BrightCardBlack)
+                                            ) {
+                                                Row(
+                                                    modifier = Modifier
+                                                        .fillMaxWidth()
+                                                        .padding(horizontal = 10.dp, vertical = 8.dp),
+                                                    horizontalArrangement = Arrangement.SpaceBetween,
+                                                    verticalAlignment = Alignment.CenterVertically
+                                                ) {
+                                                    Text(
+                                                        text = "Card bill:",
+                                                        style = MaterialTheme.typography.labelMedium.copy(fontWeight = FontWeight.Black),
+                                                        color = BrightCardBlack
+                                                    )
+                                                    Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                                                        WhitePillChip(
+                                                            label = "Transfer",
+                                                            selected = draft.type == TransactionType.TRANSFER,
+                                                            onClick = {
+                                                                onUpdateDraft(
+                                                                    draft.copy(
+                                                                        type = TransactionType.TRANSFER,
+                                                                        category = "Transfers",
+                                                                        isCardBillCheck = false
+                                                                    ),
+                                                                    false
+                                                                )
+                                                            },
+                                                            testTag = "card_bill_transfer_chip_$idx"
+                                                        )
+                                                        WhitePillChip(
+                                                            label = "Expense",
+                                                            selected = draft.type == TransactionType.EXPENSE,
+                                                            onClick = {
+                                                                onUpdateDraft(
+                                                                    draft.copy(
+                                                                        type = TransactionType.EXPENSE,
+                                                                        category = if (draft.category == "Transfers") "Bills & Utilities" else draft.category,
+                                                                        isCardBillCheck = false
+                                                                    ),
+                                                                    false
+                                                                )
+                                                            },
+                                                            testTag = "card_bill_expense_chip_$idx"
+                                                        )
+                                                    }
+                                                }
+                                            }
+                                        }
+
+                                        if (!draft.missingRowsWarning.isNullOrBlank()) {
+                                            Spacer(modifier = Modifier.height(6.dp))
+                                            Text(
+                                                text = draft.missingRowsWarning,
+                                                style = MaterialTheme.typography.labelSmall.copy(fontWeight = FontWeight.ExtraBold),
+                                                color = BrightCardBlack
+                                            )
+                                        }
+
                                         Spacer(modifier = Modifier.height(10.dp))
 
                                         // Interactive Bill-Split & Itemized Receipt Calculator (Long Paise Math)
@@ -1916,84 +2322,124 @@ fun AiReviewDeckOverlay(
                         }
                     }
 
-                    // Bottom Confirm All Bar
+                    // Bottom Confirm All / Confirm All Verified Bar
                     Surface(
                         modifier = Modifier.fillMaxWidth(),
                         color = tokens.cardSurface,
                         border = BorderStroke(if (isDark) 1.dp else 2.dp, if (isDark) tokens.subtleDivider else InkBlack)
                     ) {
-                        Row(
+                        Column(
                             modifier = Modifier
                                 .fillMaxWidth()
-                                .padding(horizontal = 20.dp, vertical = 14.dp),
-                            horizontalArrangement = Arrangement.SpaceBetween,
-                            verticalAlignment = Alignment.CenterVertically
+                                .padding(horizontal = 20.dp, vertical = 12.dp),
+                            verticalArrangement = Arrangement.spacedBy(10.dp)
                         ) {
-                            Column {
-                                Text(
-                                    text = "$activeCount of ${drafts.size} selected",
-                                    style = MaterialTheme.typography.titleMedium.copy(fontWeight = FontWeight.Bold),
-                                    color = tokens.primaryText
-                                )
-                                Text(
-                                    text = "Duplicates are skipped automatically",
-                                    style = MaterialTheme.typography.labelSmall,
-                                    color = tokens.secondaryText
-                                )
+                            if (verifiedCount > 0 && toCheckCount > 0) {
+                                Button(
+                                    onClick = {
+                                        Motion.performLightTapHaptic(view)
+                                        onConfirmAllVerified()
+                                    },
+                                    modifier = Modifier
+                                        .fillMaxWidth()
+                                        .testTag("confirm_all_verified_button"),
+                                    shape = CircleShape,
+                                    colors = ButtonDefaults.buttonColors(
+                                        containerColor = EditorialMint,
+                                        contentColor = BrightCardBlack
+                                    ),
+                                    border = BorderStroke(2.dp, BrightCardBlack),
+                                    contentPadding = PaddingValues(horizontal = 20.dp, vertical = 12.dp)
+                                ) {
+                                    Icon(
+                                        imageVector = Icons.Default.Check,
+                                        contentDescription = null,
+                                        tint = BrightCardBlack
+                                    )
+                                    Spacer(modifier = Modifier.width(8.dp))
+                                    Text(
+                                        text = "CONFIRM ALL VERIFIED ($verifiedCount)",
+                                        style = MaterialTheme.typography.titleSmall.copy(fontWeight = FontWeight.Black),
+                                        color = BrightCardBlack
+                                    )
+                                }
                             }
 
-                            Button(
-                                onClick = {
-                                    if (!isConfirmAnimating) {
-                                        Motion.performLightTapHaptic(view)
-                                        if (reducedMotion) {
-                                            onConfirmAll()
-                                        } else {
-                                            isConfirmAnimating = true
-                                            coroutineScope.launch {
-                                                confirmPopScale.animateTo(
-                                                    targetValue = 1.22f,
-                                                    animationSpec = tween(durationMillis = 100, easing = FastOutSlowInEasing)
-                                                )
-                                                confirmPopScale.animateTo(
-                                                    targetValue = 1f,
-                                                    animationSpec = Motion.popSpring(reducedMotion)
-                                                )
-                                                isConfirmAnimating = false
+                            Row(
+                                modifier = Modifier.fillMaxWidth(),
+                                horizontalArrangement = Arrangement.SpaceBetween,
+                                verticalAlignment = Alignment.CenterVertically
+                            ) {
+                                Column(modifier = Modifier.weight(1f)) {
+                                    Text(
+                                        text = "$activeCount of ${drafts.size} selected",
+                                        style = MaterialTheme.typography.titleMedium.copy(fontWeight = FontWeight.Bold),
+                                        color = tokens.primaryText
+                                    )
+                                    Text(
+                                        text = "$verifiedCount verified · $toCheckCount to check",
+                                        style = MaterialTheme.typography.labelSmall,
+                                        color = tokens.secondaryText
+                                    )
+                                }
+
+                                Button(
+                                    onClick = {
+                                        if (!isConfirmAnimating) {
+                                            Motion.performLightTapHaptic(view)
+                                            if (reducedMotion) {
                                                 onConfirmAll()
+                                            } else {
+                                                isConfirmAnimating = true
+                                                coroutineScope.launch {
+                                                    confirmPopScale.animateTo(
+                                                        targetValue = 1.22f,
+                                                        animationSpec = tween(durationMillis = 100, easing = FastOutSlowInEasing)
+                                                    )
+                                                    confirmPopScale.animateTo(
+                                                        targetValue = 1f,
+                                                        animationSpec = Motion.popSpring(reducedMotion)
+                                                    )
+                                                    isConfirmAnimating = false
+                                                    onConfirmAll()
+                                                }
                                             }
                                         }
-                                    }
-                                },
-                                modifier = Modifier
-                                    .graphicsLayer {
-                                        scaleX = confirmPopScale.value
-                                        scaleY = confirmPopScale.value
-                                    }
-                                    .testTag("confirm_all_drafts_button"),
-                                shape = CircleShape,
-                                colors = ButtonDefaults.buttonColors(
-                                    containerColor = if (isDark) CandyLimeGreen else LimeAccent,
-                                    contentColor = BrightCardBlack
-                                ),
-                                border = BorderStroke(2.dp, BrightCardBlack),
-                                contentPadding = PaddingValues(horizontal = 24.dp, vertical = 14.dp)
-                            ) {
-                                Icon(
-                                    imageVector = Icons.Default.Check,
-                                    contentDescription = null,
-                                    tint = BrightCardBlack,
-                                    modifier = Modifier.graphicsLayer {
-                                        scaleX = confirmPopScale.value
-                                        scaleY = confirmPopScale.value
-                                    }
-                                )
-                                Spacer(modifier = Modifier.width(8.dp))
-                                Text(
-                                    text = "Confirm all",
-                                    style = MaterialTheme.typography.titleMedium.copy(fontWeight = FontWeight.Black),
-                                    color = BrightCardBlack
-                                )
+                                    },
+                                    modifier = Modifier
+                                        .graphicsLayer {
+                                            scaleX = confirmPopScale.value
+                                            scaleY = confirmPopScale.value
+                                        }
+                                        .testTag("confirm_all_drafts_button"),
+                                    shape = CircleShape,
+                                    colors = ButtonDefaults.buttonColors(
+                                        containerColor = if (isDark) CandyLimeGreen else LimeAccent,
+                                        contentColor = BrightCardBlack
+                                    ),
+                                    border = BorderStroke(2.dp, BrightCardBlack),
+                                    contentPadding = PaddingValues(horizontal = 24.dp, vertical = 14.dp)
+                                ) {
+                                    Icon(
+                                        imageVector = Icons.Default.Check,
+                                        contentDescription = null,
+                                        tint = BrightCardBlack,
+                                        modifier = Modifier.graphicsLayer {
+                                            scaleX = confirmPopScale.value
+                                            scaleY = confirmPopScale.value
+                                        }
+                                    )
+                                    Spacer(modifier = Modifier.width(8.dp))
+                                    Text(
+                                        text = if (toCheckCount == 0 && verifiedCount > 0) {
+                                            "CONFIRM ALL VERIFIED ($verifiedCount)"
+                                        } else {
+                                            "Confirm all"
+                                        },
+                                        style = MaterialTheme.typography.titleMedium.copy(fontWeight = FontWeight.Black),
+                                        color = BrightCardBlack
+                                    )
+                                }
                             }
                         }
                     }
@@ -2037,6 +2483,7 @@ private fun DraftEditDialog(
     }
     var paymentAppInput by remember(draft) { mutableStateOf(draft.paymentApp) }
     var selectedPaymentMode by remember(draft) { mutableStateOf(draft.paymentMode) }
+    var isAtmWithdrawal by remember(draft) { mutableStateOf(draft.isAtmWithdrawal) }
     var refInput by remember(draft) { mutableStateOf(draft.referenceNumber.orEmpty()) }
 
     val fieldColors = OutlinedTextFieldDefaults.colors(
@@ -2102,6 +2549,18 @@ private fun DraftEditDialog(
                         tagPrefix = "draft_edit_mode"
                     )
                 }
+
+                WhitePillChip(
+                    label = if (isAtmWithdrawal) "ATM Withdrawal ✓ (Adds to Cash in Hand)" else "ATM Withdrawal (Exclude from Spent)",
+                    selected = isAtmWithdrawal,
+                    onClick = {
+                        isAtmWithdrawal = !isAtmWithdrawal
+                        if (isAtmWithdrawal) {
+                            selectedPaymentMode = "CASH"
+                        }
+                    },
+                    testTag = "draft_edit_atm_toggle"
+                )
 
                 Text("Type:", style = MaterialTheme.typography.labelLarge, color = tokens.primaryText)
                 Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
@@ -2198,7 +2657,13 @@ private fun DraftEditDialog(
                             hasExplicitTime = hasTime,
                             paymentApp = paymentAppInput.trim().ifEmpty { if (selectedPaymentMode == "CASH") "Cash" else "Unknown" },
                             referenceNumber = refInput.trim().ifEmpty { null },
-                            paymentMode = selectedPaymentMode
+                            paymentMode = selectedPaymentMode,
+                            isAtmWithdrawal = isAtmWithdrawal,
+                            dateFound = true,
+                            amountVerified = true,
+                            dateSuspicious = false,
+                            isCardBillCheck = false,
+                            confidence = 1.0f
                         ),
                         catChanged
                     )
@@ -2265,6 +2730,9 @@ fun TransactionEditorDialog(
         mutableStateOf(
             if (initialTransaction?.paymentMode.equals("CASH", ignoreCase = true)) "CASH" else "ONLINE"
         )
+    }
+    var isAtmWithdrawal by remember(initialTransaction) {
+        mutableStateOf(initialTransaction?.isAtmWithdrawal ?: false)
     }
     var refInput by remember(initialTransaction) {
         mutableStateOf(initialTransaction?.referenceNumber.orEmpty())
@@ -2428,6 +2896,18 @@ fun TransactionEditorDialog(
                         tagPrefix = "manual_editor_mode"
                     )
                 }
+
+                WhitePillChip(
+                    label = if (isAtmWithdrawal) "ATM Withdrawal ✓ (Adds to Cash in Hand)" else "ATM Withdrawal (Exclude from Spent)",
+                    selected = isAtmWithdrawal,
+                    onClick = {
+                        isAtmWithdrawal = !isAtmWithdrawal
+                        if (isAtmWithdrawal) {
+                            selectedPaymentMode = "CASH"
+                        }
+                    },
+                    testTag = "manual_editor_atm_toggle"
+                )
 
                 Text("Type:", style = MaterialTheme.typography.labelLarge, color = tokens.primaryText)
                 Row(
@@ -2595,7 +3075,8 @@ fun TransactionEditorDialog(
                             note = noteInput.trim(),
                             source = initialTransaction?.source ?: TransactionSource.MANUAL,
                             duplicateKey = dupKey,
-                            paymentMode = selectedPaymentMode
+                            paymentMode = selectedPaymentMode,
+                            isAtmWithdrawal = isAtmWithdrawal
                         ),
                         categoryChanged
                     )

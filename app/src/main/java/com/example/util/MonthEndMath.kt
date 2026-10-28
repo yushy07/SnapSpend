@@ -55,6 +55,7 @@ object MonthEndMath {
             tx.deletedAtMillis == null &&
                 tx.status == TransactionStatus.SUCCESS &&
                 tx.type == TransactionType.EXPENSE &&
+                !tx.isAtmWithdrawal &&
                 tx.amountPaise > 0L &&
                 tx.timestamp in monthStartMillis..monthEndMillis
         }
@@ -123,7 +124,7 @@ object MonthEndMath {
 
     /**
      * Computes up to 6 Quick Repeat chips from existing transactions:
-     * - Successful expenses (not failed, pending, transfer, or trashed)
+     * - Successful expenses (not failed, pending, transfer, ATM withdrawal, or trashed)
      * - Same merchant and same amount that appear 3 or more times in the last 90 days
      * - Ordered by most frequent first, then most recent.
      */
@@ -139,6 +140,7 @@ object MonthEndMath {
             tx.deletedAtMillis == null &&
                 tx.status == TransactionStatus.SUCCESS &&
                 tx.type == TransactionType.EXPENSE &&
+                !tx.isAtmWithdrawal &&
                 tx.amountPaise > 0L &&
                 tx.timestamp in cutoffMillis..nowMillis &&
                 MoneyUtils.normalizeMerchant(tx.merchant) != "unknown"

@@ -98,4 +98,69 @@ class HybridLocalScanningTest {
         val isMulti = UpiRegexPreProcessor.detectIfMultiRowStatement(statementText)
         assertTrue("Statement with multiple amounts should be identified as multi-row", isMulti)
     }
+
+    @Test
+    fun testQuickCashFastParserMultiItem() {
+        val categories = listOf(
+            CategoryEntity(id = 1, name = "Food & Dining", type = CategoryType.EXPENSE, colorHex = "#FF6F59", iconName = "restaurant", isDefault = true),
+            CategoryEntity(id = 2, name = "Transport & Fuel", type = CategoryType.EXPENSE, colorHex = "#8FE3F0", iconName = "directions_car", isDefault = true)
+        )
+        val drafts = com.example.data.ai.QuickCashFastParser.parseFastDrafts(
+            rawInput = "20 chai, 50 auto, 140 maggi",
+            categories = categories,
+            merchantMemories = emptyList(),
+            defaultType = TransactionType.EXPENSE,
+            nowMillis = 1730000000000L
+        )
+        assertNotNull("Should parse multi-item Quick Cash note locally in <20ms", drafts)
+        assertEquals(3, drafts?.size)
+        assertEquals(2000L, drafts?.get(0)?.amountPaise)
+        assertEquals("Chai", drafts?.get(0)?.merchant)
+        assertEquals("Food & Dining", drafts?.get(0)?.category)
+        assertEquals("CASH", drafts?.get(0)?.paymentMode)
+
+        assertEquals(5000L, drafts?.get(1)?.amountPaise)
+        assertEquals("Auto", drafts?.get(1)?.merchant)
+        assertEquals("Transport & Fuel", drafts?.get(1)?.category)
+
+        assertEquals(14000L, drafts?.get(2)?.amountPaise)
+        assertEquals("Maggi", drafts?.get(2)?.merchant)
+        assertEquals("Food & Dining", drafts?.get(2)?.category)
+    }
+
+    @Test
+    fun testAtmWithdrawalDoubleCountingPrevention() {
+        val atmTx = com.example.data.local.TransactionEntity(
+            id = 1L,
+            timestamp = 1730000000000L,
+            hasExplicitTime = true,
+            amountPaise = 200000L, // ₹2,000
+            type = TransactionType.EXPENSE,
+            merchant = "ATM WDL HDFC",
+            category = "Other",
+            paymentApp = "HDFC Bank",
+            referenceNumber = "ATW123",
+            status = com.example.data.local.TransactionStatus.SUCCESS,
+            note = "ATM cash withdrawal",
+            source = TransactionSource.PDF,
+            duplicateKey = "ref:atw123",
+            paymentMode = "CASH",
+            isAtmWithdrawal = true
+        )
+        val cashSpendTx = atmTx.copy(
+            id = 2L,
+            amountPaise = 5000L,
+            merchant = "Auto",
+            category = "Transport & Fuel",
+            paymentApp = "Cash",
+            isAtmWithdrawal = false
+        )
+
+        assertTrue("ATM withdrawal must be detected", com.example.data.rules.LocalInsightsAndRulesEngine.isAtmCashWithdrawalText("ATM WDL HDFC ATW"))
+        assertTrue("ATM withdrawal must NOT be counted as Spent", !com.example.data.rules.LocalInsightsAndRulesEngine.isCountableExpense(atmTx))
+        assertTrue("Regular cash expense MUST be counted as Spent", com.example.data.rules.LocalInsightsAndRulesEngine.isCountableExpense(cashSpendTx))
+        assertEquals(200000L, com.example.data.rules.LocalInsightsAndRulesEngine.computeCashWalletDeltaForTransaction(atmTx))
+        assertEquals(-5000L, com.example.data.rules.LocalInsightsAndRulesEngine.computeCashWalletDeltaForTransaction(cashSpendTx))
+    }
 }
+

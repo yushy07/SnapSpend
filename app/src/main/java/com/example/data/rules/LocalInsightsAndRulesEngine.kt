@@ -55,10 +55,37 @@ data class DraftTransaction(
     val lineItems: List<ReceiptLineItem> = emptyList(),
     val originalAmountPaise: Long = amountPaise,
     val splitWays: Int = 1, // 1 = full bill, >1 = equal split (÷N), 0 = itemized pick
-    val paymentMode: String = "ONLINE"
+    val paymentMode: String = "ONLINE",
+    val isAtmWithdrawal: Boolean = false,
+    val dateFound: Boolean = true,
+    val amountVerified: Boolean = true,
+    val regexSuggestedAmountPaise: Long? = null,
+    val dateSuspicious: Boolean = false,
+    val isCardBillCheck: Boolean = false,
+    val missingRowsWarning: String? = null,
+    val scanSha256Hash: String? = null
 ) {
     val isLowConfidence: Boolean
-        get() = confidence < 0.75f || merchant.equals("unknown", ignoreCase = true) || amountPaise <= 0L
+        get() = confidence < 0.75f ||
+            merchant.equals("unknown", ignoreCase = true) ||
+            amountPaise <= 0L ||
+            !dateFound ||
+            !amountVerified ||
+            dateSuspicious ||
+            isCardBillCheck ||
+            missingRowsWarning != null
+
+    val isVerified: Boolean
+        get() = amountPaise > 0L &&
+            !merchant.equals("unknown", ignoreCase = true) &&
+            merchant.isNotBlank() &&
+            dateFound &&
+            amountVerified &&
+            !dateSuspicious &&
+            !isCardBillCheck &&
+            missingRowsWarning == null &&
+            status == TransactionStatus.SUCCESS &&
+            confidence >= 0.75f
 
     val duplicateKey: String
         get() = MoneyUtils.buildDuplicateKey(
@@ -217,23 +244,12 @@ data class CashWalletTotals(
  */
 object LocalInsightsAndRulesEngine {
 
-    /**
-     * Resolves an AI-extracted draft transaction against existing Room transactions
-     * and learned Merchant Memory rules:
-     * 1. Cleans cryptic UPI/NEFT/POS merchant names while preserving raw descriptor if modified.
-     * 2. Refunds ("Refunds & Cashback" or merchant/note mentioning refund) are set to EARNING.
-     * 3. Learned Merchant Memory overrides AI's suggested category.
-     * 4. Duplicate key checks referenceNumber first; otherwise date + HH:mm + amountPaise + merchant.
-     * 5. If an existing match was PENDING and the new scan is SUCCESS (or FAILED),
-     *    sets ResolutionMode.UPDATE_PENDING_TO_FINAL (updates existing row in place, not skipped!).
-     * 6. If an existing match was already final, sets ResolutionMode.SKIP_DUPLICATE (skipped by default).
-     */
-    private val ATM_TOKEN_REGEX = Regex("""\bATW\b""", RegexOption.IGNORE_CASE)
+    private val ATM_TOKEN_REGEX = Regex("""\b(?:ATM|ATW)\b""", RegexOption.IGNORE_CASE)
 
     /**
      * Detects ATM cash withdrawal descriptions from bank statements, SMS alerts, or receipts
-     * ("ATM WDL", "CASH WITHDRAWAL", "ATW", etc.) so they are classified as TRANSFER + CASH
-     * (topping up the Cash Wallet without double-counting as an expense).
+     * ("ATM", "ATM WDL", "CASH WDL", "CASH WITHDRAWAL", "ATW", etc.) so they are flagged with
+     * `isAtmWithdrawal = true` and excluded from monthly "Spent" totals while topping up Cash in Hand.
      */
     fun isAtmCashWithdrawalText(text: String): Boolean {
         if (text.isBlank()) return false
@@ -250,6 +266,31 @@ object LocalInsightsAndRulesEngine {
             ATM_TOKEN_REGEX.containsMatchIn(upper)
     }
 
+    /**
+     * Returns true if a transaction represents a real non-ATM expense that should count toward "Spent".
+     * Any transaction with `isAtmWithdrawal == true` is excluded to prevent ATM double-counting.
+     */
+    fun isCountableExpense(tx: TransactionEntity): Boolean {
+        return tx.type == TransactionType.EXPENSE && !tx.isAtmWithdrawal
+    }
+
+    /**
+     * Computes how much a single confirmed/active transaction changes the Cash in Hand wallet balance:
+     * - ATM Withdrawal (`isAtmWithdrawal == true`) or CASH TRANSFER / CASH EARNING -> `+amountPaise`
+     * - CASH EXPENSE (`paymentMode == "CASH"` && `!isAtmWithdrawal`) -> `-amountPaise`
+     * - Otherwise -> `0L`
+     */
+    fun computeCashWalletDeltaForTransaction(tx: TransactionEntity): Long {
+        if (tx.deletedAtMillis != null || tx.status != TransactionStatus.SUCCESS) return 0L
+        return when {
+            tx.isAtmWithdrawal -> tx.amountPaise
+            tx.paymentMode.equals("CASH", ignoreCase = true) && tx.type == TransactionType.TRANSFER -> tx.amountPaise
+            tx.paymentMode.equals("CASH", ignoreCase = true) && tx.type == TransactionType.EARNING -> tx.amountPaise
+            tx.paymentMode.equals("CASH", ignoreCase = true) && tx.type == TransactionType.EXPENSE -> -tx.amountPaise
+            else -> 0L
+        }
+    }
+
     fun enrichAndResolveDraft(
         rawDraft: DraftTransaction,
         existingTransactions: List<TransactionEntity>,
@@ -260,7 +301,8 @@ object LocalInsightsAndRulesEngine {
         val normMerchant = MoneyUtils.normalizeMerchant(cleanedMerchant)
         val learnedMemory = merchantMemoryMap[normMerchant]
 
-        val isAtmWithdrawal = isAtmCashWithdrawalText(rawDraft.merchant) ||
+        val isAtmWithdrawal = rawDraft.isAtmWithdrawal ||
+            isAtmCashWithdrawalText(rawDraft.merchant) ||
             isAtmCashWithdrawalText(rawDraft.rawMerchantText) ||
             isAtmCashWithdrawalText(rawDraft.note) ||
             isAtmCashWithdrawalText(cleanedMerchant)
@@ -332,6 +374,7 @@ object LocalInsightsAndRulesEngine {
             type = resolvedType,
             category = resolvedCategory,
             paymentMode = resolvedPaymentMode,
+            isAtmWithdrawal = isAtmWithdrawal,
             existingMatchId = matchedExisting?.id,
             existingMatchStatus = matchedExisting?.status,
             resolutionMode = resolutionMode,
@@ -342,33 +385,52 @@ object LocalInsightsAndRulesEngine {
 
     /**
      * Computes Cash Wallet ("Cash in Hand") balance and this month's Cash Spent in whole paise:
-     * cashInHandPaise = (non-trashed SUCCESS where type == TRANSFER && paymentMode == "CASH")
-     *                 + (non-trashed SUCCESS where type == EARNING && paymentMode == "CASH")
-     *                 - (non-trashed SUCCESS where type == EXPENSE && paymentMode == "CASH")
+     * - ATM withdrawals (`isAtmWithdrawal == true`) or CASH TRANSFERs count as cash inflows.
+     * - CASH EARNINGs count as cash inflows.
+     * - CASH EXPENSEs (`!isAtmWithdrawal`) count as cash outflows.
+     * - If `persistedWalletBalancePaise` is provided (from DataStore), uses it as the authoritative
+     *   `cashInHandPaise`.
      */
     fun computeCashWalletTotals(
         allTransactions: List<TransactionEntity>,
-        nowMillis: Long = System.currentTimeMillis()
+        nowMillis: Long = System.currentTimeMillis(),
+        persistedWalletBalancePaise: Long? = null
     ): CashWalletTotals {
-        val activeSuccessCash = allTransactions.filter { tx ->
-            tx.deletedAtMillis == null &&
-                tx.status == TransactionStatus.SUCCESS &&
-                tx.paymentMode.equals("CASH", ignoreCase = true)
+        val activeSuccess = allTransactions.filter { tx ->
+            tx.deletedAtMillis == null && tx.status == TransactionStatus.SUCCESS
         }
-        val cashTransfersInPaise = activeSuccessCash
-            .filter { it.type == TransactionType.TRANSFER }
+        val cashTransfersInPaise = activeSuccess
+            .filter {
+                it.isAtmWithdrawal ||
+                    (it.paymentMode.equals("CASH", ignoreCase = true) && it.type == TransactionType.TRANSFER)
+            }
             .sumOf { it.amountPaise }
-        val cashEarningsInPaise = activeSuccessCash
-            .filter { it.type == TransactionType.EARNING }
+        val cashEarningsInPaise = activeSuccess
+            .filter {
+                !it.isAtmWithdrawal &&
+                    it.paymentMode.equals("CASH", ignoreCase = true) &&
+                    it.type == TransactionType.EARNING
+            }
             .sumOf { it.amountPaise }
-        val cashExpensesOutPaise = activeSuccessCash
-            .filter { it.type == TransactionType.EXPENSE }
+        val cashExpensesOutPaise = activeSuccess
+            .filter {
+                !it.isAtmWithdrawal &&
+                    it.paymentMode.equals("CASH", ignoreCase = true) &&
+                    it.type == TransactionType.EXPENSE
+            }
             .sumOf { it.amountPaise }
-        val cashInHandPaise = cashTransfersInPaise + cashEarningsInPaise - cashExpensesOutPaise
+
+        val dynamicCashInHand = cashTransfersInPaise + cashEarningsInPaise - cashExpensesOutPaise
+        val cashInHandPaise = persistedWalletBalancePaise ?: dynamicCashInHand
 
         val (monthStart, monthEnd) = getMonthBounds(nowMillis, 0)
-        val thisMonthCashSpentPaise = activeSuccessCash
-            .filter { it.type == TransactionType.EXPENSE && it.timestamp in monthStart..monthEnd }
+        val thisMonthCashSpentPaise = activeSuccess
+            .filter {
+                !it.isAtmWithdrawal &&
+                    it.paymentMode.equals("CASH", ignoreCase = true) &&
+                    it.type == TransactionType.EXPENSE &&
+                    it.timestamp in monthStart..monthEnd
+            }
             .sumOf { it.amountPaise }
 
         return CashWalletTotals(
@@ -433,13 +495,16 @@ object LocalInsightsAndRulesEngine {
 
     /**
      * Builds Category Pie/Donut slices for a given list of transactions.
+     * Excludes ATM withdrawals (`isAtmWithdrawal == true`) when building EXPENSE slices.
      */
     fun buildCategorySlices(
         transactions: List<TransactionEntity>,
         categories: List<CategoryEntity>,
         type: TransactionType = TransactionType.EXPENSE
     ): List<CategorySlice> {
-        val valid = successfulTransactions(transactions).filter { it.type == type && it.amountPaise > 0L }
+        val valid = successfulTransactions(transactions).filter {
+            it.type == type && it.amountPaise > 0L && (type != TransactionType.EXPENSE || !it.isAtmWithdrawal)
+        }
         val totalPaise = valid.sumOf { it.amountPaise }
         if (totalPaise <= 0L) return emptyList()
 
@@ -470,7 +535,7 @@ object LocalInsightsAndRulesEngine {
      */
     fun buildTop5SpendingPlaces(transactions: List<TransactionEntity>): List<TopMerchantItem> {
         val expenses = successfulTransactions(transactions).filter {
-            it.type == TransactionType.EXPENSE && it.amountPaise > 0L
+            isCountableExpense(it) && it.amountPaise > 0L
         }
         val totalSpentPaise = expenses.sumOf { it.amountPaise }.coerceAtLeast(1L)
 
@@ -567,8 +632,8 @@ object LocalInsightsAndRulesEngine {
         val curTxs = transactions.filter { it.timestamp in curStart..curEnd }
         val prevTxs = transactions.filter { it.timestamp in prevStart..prevEnd }
 
-        val curSpent = curTxs.filter { it.type == TransactionType.EXPENSE }.sumOf { it.amountPaise }
-        val prevSpent = prevTxs.filter { it.type == TransactionType.EXPENSE }.sumOf { it.amountPaise }
+        val curSpent = curTxs.filter { isCountableExpense(it) }.sumOf { it.amountPaise }
+        val prevSpent = prevTxs.filter { isCountableExpense(it) }.sumOf { it.amountPaise }
         val curEarned = curTxs.filter { it.type == TransactionType.EARNING }.sumOf { it.amountPaise }
         val prevEarned = prevTxs.filter { it.type == TransactionType.EARNING }.sumOf { it.amountPaise }
 
@@ -608,10 +673,10 @@ object LocalInsightsAndRulesEngine {
         val (lastMonthStart, lastMonthEnd) = getMonthBounds(nowMillis, -1)
 
         val thisMonthExpenses = valid.filter {
-            it.type == TransactionType.EXPENSE && it.timestamp in thisMonthStart..thisMonthEnd
+            isCountableExpense(it) && it.timestamp in thisMonthStart..thisMonthEnd
         }
         val lastMonthExpenses = valid.filter {
-            it.type == TransactionType.EXPENSE && it.timestamp in lastMonthStart..lastMonthEnd
+            isCountableExpense(it) && it.timestamp in lastMonthStart..lastMonthEnd
         }
 
         val thisMonthSpent = thisMonthExpenses.sumOf { it.amountPaise }
@@ -695,7 +760,7 @@ object LocalInsightsAndRulesEngine {
     ): List<RepeatingPaymentEntity> {
         val existingStateMap = existingSaved.associateBy { it.id }
         val expenses = successfulTransactions(allTransactions)
-            .filter { it.type == TransactionType.EXPENSE && it.amountPaise > 0L }
+            .filter { isCountableExpense(it) && it.amountPaise > 0L }
 
         val detected = mutableListOf<RepeatingPaymentEntity>()
         val groupedByMerchant = expenses.groupBy { MoneyUtils.normalizeMerchant(it.merchant) }
@@ -754,7 +819,7 @@ object LocalInsightsAndRulesEngine {
     ): List<BudgetStatusItem> {
         val colorMap = categories.associate { it.name to it.colorHex }
         val expensesByCategory = successfulTransactions(thisMonthTransactions)
-            .filter { it.type == TransactionType.EXPENSE }
+            .filter { isCountableExpense(it) }
             .groupBy { it.category }
             .mapValues { (_, list) -> list.sumOf { it.amountPaise } }
 
@@ -789,7 +854,7 @@ object LocalInsightsAndRulesEngine {
             val (start, end) = getMonthBounds(nowMillis, -offset)
             val monthTxs = valid.filter { it.timestamp in start..end }
             val earned = monthTxs.filter { it.type == TransactionType.EARNING }.sumOf { it.amountPaise }
-            val spent = monthTxs.filter { it.type == TransactionType.EXPENSE }.sumOf { it.amountPaise }
+            val spent = monthTxs.filter { isCountableExpense(it) }.sumOf { it.amountPaise }
             MonthlyIncomeExpenseBar(
                 monthLabel = fmt.format(Date(start)),
                 earnedPaise = earned,
@@ -807,7 +872,7 @@ object LocalInsightsAndRulesEngine {
         nowMillis: Long = System.currentTimeMillis()
     ): List<LineChartPoint> {
         val validExpenses = successfulTransactions(allTransactions)
-            .filter { it.type == TransactionType.EXPENSE }
+            .filter { isCountableExpense(it) }
 
         return when (granularity) {
             "DAILY" -> {

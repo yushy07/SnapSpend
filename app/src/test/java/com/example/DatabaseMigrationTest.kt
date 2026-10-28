@@ -180,12 +180,12 @@ class DatabaseMigrationTest {
             AppDatabase.MIGRATION_3_4
         )
 
-        // 3. Query migrated rows and verify every column value from v3 is preserved and paymentMode defaults to 'ONLINE'
+        // 3. Query migrated rows and verify every column value from v3 is preserved, paymentMode defaults to 'ONLINE', and isAtmWithdrawal defaults to 0
         val cursor = migratedDb.query(
             """
             SELECT id, timestamp, hasExplicitTime, amountPaise, type, merchant,
                    category, categoryId, paymentApp, referenceNumber, status,
-                   note, createdAt, source, duplicateKey, deletedAtMillis, paymentMode
+                   note, createdAt, source, duplicateKey, deletedAtMillis, paymentMode, isAtmWithdrawal
             FROM transactions
             ORDER BY id ASC
             """.trimIndent()
@@ -211,6 +211,7 @@ class DatabaseMigrationTest {
         assertEquals("ref:utr201999", cursor.getString(14))
         assertTrue(cursor.isNull(15))
         assertEquals("ONLINE", cursor.getString(16))
+        assertEquals(0, cursor.getInt(17))
 
         assertTrue(cursor.moveToNext())
         assertEquals(202L, cursor.getLong(0))
@@ -230,6 +231,7 @@ class DatabaseMigrationTest {
         assertEquals("2024-10-27|none|89900|zomato order", cursor.getString(14))
         assertEquals(1730009000000L, cursor.getLong(15))
         assertEquals("ONLINE", cursor.getString(16))
+        assertEquals(0, cursor.getInt(17))
 
         cursor.close()
         migratedDb.close()

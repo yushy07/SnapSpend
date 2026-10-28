@@ -131,6 +131,9 @@ fun HomeScreen(
     uiState: SnapSpendUiState,
     scanState: ScanUiState = ScanUiState.Idle,
     activeScanState: com.example.ui.ScanProgressState? = null,
+    skippedKnownBanner: com.example.ui.SkippedKnownBannerState? = null,
+    onOpenSkippedKnownTransaction: (Long?) -> Unit = {},
+    onDismissSkippedKnownBanner: () -> Unit = {},
     onOpenReviewDeck: () -> Unit = {},
     onRetryScan: () -> Unit = {},
     onCancelScan: () -> Unit = {},
@@ -148,6 +151,7 @@ fun HomeScreen(
     onSetBudgetClick: () -> Unit = {},
     onQuickRepeatTap: (QuickRepeatChip) -> Unit = {},
     onQuickRepeatLongPress: (QuickRepeatChip) -> Unit = {},
+    onCashWalletClick: () -> Unit = {},
     topContentPadding: Dp = 8.dp,
     bottomContentPadding: Dp = 120.dp,
     modifier: Modifier = Modifier
@@ -213,7 +217,7 @@ fun HomeScreen(
         "MONTHLY CASHFLOW PACE"
     }
     val secondaryInsightBody = uiState.localMathInsights.getOrNull(1)
-        ?: "Total spent is ${MoneyUtils.formatPaise(uiState.thisMonthSpentPaise)} across ${uiState.allTransactions.count { it.type == TransactionType.EXPENSE }} expenses this month."
+        ?: "Total spent is ${MoneyUtils.formatPaise(uiState.thisMonthSpentPaise)} across ${uiState.allTransactions.count { it.type == TransactionType.EXPENSE && !it.isAtmWithdrawal }} expenses this month."
 
     MarkScreenEntrancePlayedEffect(screenKey = "home")
 
@@ -317,6 +321,93 @@ fun HomeScreen(
                     onDismiss = onDismissScan,
                     modifier = Modifier.staggeredScreenEntrance("home", 1)
                 )
+            }
+        }
+
+        // SKIPPED_KNOWN Banner: "ALREADY SAVED: ₹X · Merchant · date" with "OPEN IT" action
+        if (skippedKnownBanner != null) {
+            item(key = "home_skipped_known_banner") {
+                Editorial3DLayerBox(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .testTag("home_skipped_known_banner"),
+                    shape = RoundedCornerShape(24.dp),
+                    extrusionColor = InkBlack,
+                    depthX = 3.5.dp,
+                    depthY = 5.dp
+                ) {
+                    Surface(
+                        modifier = Modifier.fillMaxWidth(),
+                        shape = RoundedCornerShape(24.dp),
+                        color = PaleMintTint,
+                        contentColor = InkBlack,
+                        border = BorderStroke(1.8.dp, InkBlack)
+                    ) {
+                        Row(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .padding(horizontal = 16.dp, vertical = 14.dp),
+                            horizontalArrangement = Arrangement.SpaceBetween,
+                            verticalAlignment = Alignment.CenterVertically
+                        ) {
+                            Column(modifier = Modifier.weight(1f)) {
+                                TinySectionLabel(
+                                    text = "SKIPPED AI · ALREADY IN YOUR LEDGER",
+                                    color = InkBlack.copy(alpha = 0.72f)
+                                )
+                                Spacer(modifier = Modifier.height(2.dp))
+                                Text(
+                                    text = "ALREADY SAVED: ${MoneyUtils.formatPaise(skippedKnownBanner.amountPaise)} · ${skippedKnownBanner.merchant} · ${skippedKnownBanner.dateFormatted}",
+                                    style = CondensedCardTitleStyle.copy(fontSize = 18.sp),
+                                    color = InkBlack
+                                )
+                            }
+                            Spacer(modifier = Modifier.width(8.dp))
+                            Row(
+                                horizontalArrangement = Arrangement.spacedBy(6.dp),
+                                verticalAlignment = Alignment.CenterVertically
+                            ) {
+                                Surface(
+                                    onClick = {
+                                        onOpenSkippedKnownTransaction(skippedKnownBanner.existingTransactionId)
+                                    },
+                                    shape = CircleShape,
+                                    color = InkBlack,
+                                    contentColor = PureWhite,
+                                    border = BorderStroke(1.5.dp, InkBlack),
+                                    modifier = Modifier.testTag("skipped_known_open_it_button")
+                                ) {
+                                    Text(
+                                        text = "OPEN IT",
+                                        style = MaterialTheme.typography.labelSmall.copy(
+                                            fontWeight = FontWeight.Black,
+                                            fontSize = 11.sp
+                                        ),
+                                        color = PureWhite,
+                                        modifier = Modifier.padding(horizontal = 12.dp, vertical = 8.dp)
+                                    )
+                                }
+                                Surface(
+                                    onClick = onDismissSkippedKnownBanner,
+                                    shape = CircleShape,
+                                    color = PureWhite,
+                                    contentColor = InkBlack,
+                                    border = BorderStroke(1.5.dp, InkBlack),
+                                    modifier = Modifier.size(32.dp)
+                                ) {
+                                    Box(contentAlignment = Alignment.Center) {
+                                        Icon(
+                                            imageVector = Icons.Default.Close,
+                                            contentDescription = "Dismiss",
+                                            tint = InkBlack,
+                                            modifier = Modifier.size(16.dp)
+                                        )
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
             }
         }
 
@@ -448,6 +539,13 @@ fun HomeScreen(
                     onCornerClick = onSeeChartsClick
                 )
 
+                // Neo-Brutalist "Cash in Hand: ₹X" Pill Card + Quick Cash Button near the main balance header
+                CashInHandWalletPillCard(
+                    cashInHandPaise = uiState.cashInHandPaise,
+                    thisMonthCashSpentPaise = uiState.thisMonthCashSpentPaise,
+                    onClick = onCashWalletClick
+                )
+
                 Row(
                     modifier = Modifier.fillMaxWidth(),
                     horizontalArrangement = Arrangement.spacedBy(12.dp)
@@ -563,6 +661,7 @@ private fun computeWeeklyDayChipData(
     val cal = Calendar.getInstance()
     val expenseTxs = transactions.filter {
         it.type == TransactionType.EXPENSE &&
+            !it.isAtmWithdrawal &&
             it.status == TransactionStatus.SUCCESS &&
             it.timestamp in startMillis..endMillis
     }
@@ -1509,11 +1608,39 @@ fun LiveBackgroundScanCard(
 
                 when {
                     isScanning -> {
-                        Text(
-                            text = scanState.stepDescription,
-                            style = CondensedCardTitleStyle.copy(fontSize = 17.sp),
-                            color = InkBlack
-                        )
+                        Row(
+                            modifier = Modifier.fillMaxWidth(),
+                            horizontalArrangement = Arrangement.SpaceBetween,
+                            verticalAlignment = Alignment.CenterVertically
+                        ) {
+                            Text(
+                                text = "${scanState.stepDescription} (${scanState.elapsedSeconds}s...)",
+                                style = CondensedCardTitleStyle.copy(fontSize = 17.sp),
+                                color = InkBlack,
+                                modifier = Modifier.weight(1f)
+                            )
+                            Spacer(modifier = Modifier.width(8.dp))
+                            Surface(
+                                onClick = {
+                                    Motion.performLightTapHaptic(view)
+                                    onCancel()
+                                },
+                                shape = CircleShape,
+                                color = PureWhite,
+                                contentColor = InkBlack,
+                                border = BorderStroke(1.4.dp, InkBlack)
+                            ) {
+                                Text(
+                                    text = "CANCEL",
+                                    style = MaterialTheme.typography.labelSmall.copy(
+                                        fontWeight = FontWeight.Black,
+                                        fontSize = 11.sp
+                                    ),
+                                    color = InkBlack,
+                                    modifier = Modifier.padding(horizontal = 10.dp, vertical = 5.dp)
+                                )
+                            }
+                        }
                         Spacer(modifier = Modifier.height(8.dp))
                         Box(
                             modifier = Modifier
@@ -1667,5 +1794,149 @@ fun LiveBackgroundScanCard(
 }
 
 data class Quad<A, B, C, D>(val first: A, val second: B, val third: C, val fourth: D)
+
+/**
+ * Compact Neo-Brutalist 3D "Cash in Hand: ₹X" Pill Card with a "Quick Cash" button
+ * displayed near the main balance header on the Home Screen.
+ * Tapping anywhere on it opens the Quick Cash Logger & Cash Wallet Adjustment sheet.
+ */
+@Composable
+fun CashInHandWalletPillCard(
+    cashInHandPaise: Long,
+    thisMonthCashSpentPaise: Long,
+    onClick: () -> Unit,
+    modifier: Modifier = Modifier
+) {
+    val view = LocalView.current
+    val reducedMotion = LocalReducedMotion.current
+    val interactionSource = remember { MutableInteractionSource() }
+    val isPressed by interactionSource.collectIsPressedAsState()
+    val scale by animateFloatAsState(
+        targetValue = if (isPressed) 0.98f else 1f,
+        animationSpec = Motion.pressSpring(reducedMotion),
+        label = "cash_wallet_pill_scale"
+    )
+    val animatedCashText = rememberAnimatedPaise(targetPaise = cashInHandPaise)
+
+    Editorial3DLayerBox(
+        modifier = modifier
+            .fillMaxWidth()
+            .graphicsLayer {
+                scaleX = scale
+                scaleY = scale
+            }
+            .testTag("home_cash_in_hand_pill_card"),
+        shape = RoundedCornerShape(24.dp),
+        extrusionColor = InkBlack,
+        extrusionBorderColor = InkBlack,
+        depthX = 3.dp,
+        depthY = 3.dp
+    ) {
+        Surface(
+            onClick = {
+                Motion.performLightTapHaptic(view)
+                onClick()
+            },
+            interactionSource = interactionSource,
+            modifier = Modifier.fillMaxWidth(),
+            shape = RoundedCornerShape(24.dp),
+            color = SunnyYellow,
+            contentColor = InkBlack,
+            border = BorderStroke(2.dp, InkBlack)
+        ) {
+            Row(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(horizontal = 16.dp, vertical = 12.dp),
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.SpaceBetween
+            ) {
+                Row(
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.spacedBy(12.dp),
+                    modifier = Modifier.weight(1f)
+                ) {
+                    Box(
+                        modifier = Modifier
+                            .size(40.dp)
+                            .clip(CircleShape)
+                            .background(PureWhite)
+                            .border(1.8.dp, InkBlack, CircleShape),
+                        contentAlignment = Alignment.Center
+                    ) {
+                        Icon(
+                            imageVector = Icons.Outlined.AccountBalanceWallet,
+                            contentDescription = "Cash Wallet",
+                            tint = InkBlack,
+                            modifier = Modifier.size(20.dp)
+                        )
+                    }
+
+                    Column(modifier = Modifier.weight(1f)) {
+                        Text(
+                            text = "Cash in Hand: $animatedCashText",
+                            style = CondensedCardTitleStyle.copy(
+                                fontSize = 20.sp,
+                                lineHeight = 22.sp
+                            ),
+                            color = InkBlack,
+                            maxLines = 1,
+                            overflow = TextOverflow.Ellipsis,
+                            modifier = Modifier.testTag("home_cash_in_hand_value_text")
+                        )
+                        Text(
+                            text = if (thisMonthCashSpentPaise > 0L) {
+                                "${MoneyUtils.formatPaise(thisMonthCashSpentPaise)} cash spent · Tap for Quick Cash or top-up"
+                            } else {
+                                "Tap to log '20 chai, 50 auto' or adjust wallet"
+                            },
+                            style = MaterialTheme.typography.labelSmall.copy(fontWeight = FontWeight.Bold),
+                            color = InkBlack.copy(alpha = 0.82f),
+                            maxLines = 1,
+                            overflow = TextOverflow.Ellipsis
+                        )
+                    }
+                }
+
+                Spacer(modifier = Modifier.width(8.dp))
+
+                Surface(
+                    onClick = {
+                        Motion.performLightTapHaptic(view)
+                        onClick()
+                    },
+                    shape = CircleShape,
+                    color = InkBlack,
+                    contentColor = PureWhite,
+                    border = BorderStroke(1.5.dp, InkBlack),
+                    modifier = Modifier.testTag("home_quick_cash_button")
+                ) {
+                    Row(
+                        modifier = Modifier.padding(horizontal = 12.dp, vertical = 8.dp),
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.spacedBy(4.dp)
+                    ) {
+                        Icon(
+                            imageVector = Icons.Default.Add,
+                            contentDescription = null,
+                            tint = PureWhite,
+                            modifier = Modifier.size(16.dp)
+                        )
+                        Text(
+                            text = "QUICK CASH",
+                            style = MaterialTheme.typography.labelSmall.copy(
+                                fontWeight = FontWeight.Black,
+                                fontSize = 11.sp,
+                                letterSpacing = 0.4.sp
+                            ),
+                            color = PureWhite
+                        )
+                    }
+                }
+            }
+        }
+    }
+}
+
 
 

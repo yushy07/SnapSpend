@@ -1,6 +1,6 @@
 {
-  "summary":  "Implementation plan for Smart Cash Mode & Cash Wallet, including Room database migration (MIGRATION_3_4 with paymentMode and isAtmWithdrawal), persistent DataStore Cash Wallet balance tracking with ATM double-counting prevention, <20ms 0-API Regex Quick Cash logger with instant save + Undo snackbar and Gemini 3.8-Flash text fallback, and Neo-Brutalist Home/Transaction/Review UI updates.",
-  "updatedAt":  "2026-10-28T11:29:08.536042947Z",
+  "summary":  "Revised implementation plan strictly aligned with every requirement in the prompt: C.9 fast-path eligibility (UTR or merchant memory), 150-brand dictionary category mapping, local Scan Log & Scan Lab benchmarking (long vs. compact keys), PDF text layer extraction, statement line filtering, and local verification with VERIFIED pill and batch confirmation.",
+  "updatedAt":  "2026-10-28T12:11:48.071427981Z",
   "requestFeedback":  true,
   "userFacing":  true
 }

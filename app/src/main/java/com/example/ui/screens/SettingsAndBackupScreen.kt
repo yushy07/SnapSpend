@@ -64,6 +64,7 @@ import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.example.data.backup.BackupStateSnapshot
+import com.example.data.local.CardBillHandlingMode
 import com.example.data.local.CategoryEntity
 import com.example.data.local.CategoryType
 import com.example.ui.SnapSpendUiState
@@ -128,6 +129,8 @@ fun SettingsAndBackupScreen(
     notificationPermissionStatus: String = "ALLOWED",
     onRequestNotificationPermission: () -> Unit = {},
     onOpenAppSettings: () -> Unit = {},
+    cardBillHandlingMode: CardBillHandlingMode = CardBillHandlingMode.ASK,
+    onCardBillHandlingModeChange: (CardBillHandlingMode) -> Unit = {},
     topContentPadding: Dp = 8.dp,
     bottomContentPadding: Dp = 120.dp,
     modifier: Modifier = Modifier
@@ -220,6 +223,58 @@ fun SettingsAndBackupScreen(
                             labelProvider = { it.label },
                             onOptionSelected = onThemeModeChange,
                             optionTestTagProvider = { "theme_option_${it.name.lowercase()}" }
+                        )
+                    }
+                }
+            }
+        }
+
+        // 2b. Card Bill Payments Handling Mode (Ask / Transfer / Expense)
+        item(key = "settings_card_bill_handling_card") {
+            Editorial3DLayerBox(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .staggeredScreenEntrance(screenKey = "settings", index = 1)
+                    .testTag("card_bill_handling_card"),
+                shape = RoundedCornerShape(28.dp),
+                extrusionColor = InkBlack,
+                extrusionBorderColor = InkBlack,
+                depthX = 4.dp,
+                depthY = 6.dp
+            ) {
+                Surface(
+                    modifier = Modifier.fillMaxWidth(),
+                    shape = RoundedCornerShape(28.dp),
+                    color = PaleAquaTint,
+                    contentColor = InkBlack,
+                    border = BorderStroke(
+                        width = 1.8.dp,
+                        color = InkBlack
+                    )
+                ) {
+                    Column(modifier = Modifier.padding(22.dp)) {
+                        TinySectionLabel(
+                            text = "SCANNING & STATEMENT RULE",
+                            color = InkBlack.copy(alpha = 0.72f)
+                        )
+                        Spacer(modifier = Modifier.height(4.dp))
+                        Text(
+                            text = "CARD BILL PAYMENTS",
+                            style = CondensedCardTitleStyle.copy(fontSize = 26.sp),
+                            color = InkBlack
+                        )
+                        Text(
+                            text = "How scanned credit card bill payments (CRED, SBI Card, HDFC CC, etc.) are categorized",
+                            style = MaterialTheme.typography.bodySmall.copy(fontWeight = FontWeight.SemiBold),
+                            color = InkBlack.copy(alpha = 0.80f)
+                        )
+                        Spacer(modifier = Modifier.height(14.dp))
+                        SegmentedPillToggle(
+                            options = CardBillHandlingMode.entries,
+                            selectedOption = cardBillHandlingMode,
+                            labelProvider = { it.label },
+                            onOptionSelected = onCardBillHandlingModeChange,
+                            optionTestTagProvider = { "card_bill_option_${it.name.lowercase()}" }
                         )
                     }
                 }

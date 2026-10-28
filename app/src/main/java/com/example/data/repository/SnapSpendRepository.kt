@@ -29,7 +29,8 @@ import java.util.Locale
 data class ImportSummary(
     val insertedCount: Int,
     val updatedPendingCount: Int,
-    val skippedDuplicateCount: Int
+    val skippedDuplicateCount: Int,
+    val insertedIds: List<Long> = emptyList()
 )
 
 class SnapSpendRepository(private val database: SnapSpendDatabase) {
@@ -118,6 +119,15 @@ class SnapSpendRepository(private val database: SnapSpendDatabase) {
             transaction.category
         }
 
+        val detectedAtm = transaction.isAtmWithdrawal ||
+            LocalInsightsAndRulesEngine.isAtmCashWithdrawalText(transaction.merchant) ||
+            LocalInsightsAndRulesEngine.isAtmCashWithdrawalText(transaction.note)
+        val normalizedPaymentMode = if (detectedAtm || transaction.paymentMode.equals("CASH", ignoreCase = true)) {
+            "CASH"
+        } else {
+            "ONLINE"
+        }
+
         val recomputedKey = MoneyUtils.buildDuplicateKey(
             referenceNumber = transaction.referenceNumber,
             timestampMillis = transaction.timestamp,
@@ -126,9 +136,11 @@ class SnapSpendRepository(private val database: SnapSpendDatabase) {
             merchant = transaction.merchant
         )
         val cleanTx = transaction.copy(
-            category = resolvedCategoryName,
+            category = if (detectedAtm && resolvedCategoryName == "Other") "Transfers" else resolvedCategoryName,
             categoryId = resolvedCategoryId,
-            duplicateKey = recomputedKey
+            duplicateKey = recomputedKey,
+            paymentMode = normalizedPaymentMode,
+            isAtmWithdrawal = detectedAtm
         )
         val id = if (cleanTx.id == 0L) {
             dao.insertTransaction(cleanTx)
@@ -137,11 +149,44 @@ class SnapSpendRepository(private val database: SnapSpendDatabase) {
             cleanTx.id
         }
 
-        if (learnMerchantCategory && cleanTx.type != TransactionType.TRANSFER) {
+        if (learnMerchantCategory && cleanTx.type != TransactionType.TRANSFER && !cleanTx.isAtmWithdrawal) {
             saveMerchantMemoryRule(cleanTx.merchant, cleanTx.category)
         }
         refreshRepeatingPayments()
         return id
+    }
+
+    /**
+     * Inserts a batch of Quick Cash transactions atomically and returns their inserted row IDs.
+     */
+    suspend fun insertQuickCashBatch(transactions: List<TransactionEntity>): List<Long> = withContext(Dispatchers.IO) {
+        if (transactions.isEmpty()) return@withContext emptyList()
+        val prepared = transactions.map { tx ->
+            val resolvedCatId = if (tx.categoryId != 0L) tx.categoryId else resolveCategoryId(tx.category)
+            val dupKey = MoneyUtils.buildDuplicateKey(
+                referenceNumber = tx.referenceNumber,
+                timestampMillis = tx.timestamp,
+                hasExplicitTime = tx.hasExplicitTime,
+                amountPaise = tx.amountPaise,
+                merchant = tx.merchant
+            )
+            tx.copy(
+                categoryId = resolvedCatId,
+                duplicateKey = dupKey,
+                paymentMode = "CASH"
+            )
+        }
+        val ids = dao.insertTransactions(prepared)
+        refreshRepeatingPayments()
+        ids
+    }
+
+    suspend fun getTransactionById(id: Long): TransactionEntity? = withContext(Dispatchers.IO) {
+        dao.getTransactionById(id)
+    }
+
+    suspend fun findByReferenceNumber(refNumber: String): TransactionEntity? = withContext(Dispatchers.IO) {
+        dao.findByReferenceNumber(refNumber)
     }
 
     /**
@@ -184,6 +229,7 @@ class SnapSpendRepository(private val database: SnapSpendDatabase) {
         var inserted = 0
         var updatedPending = 0
         var skipped = 0
+        val insertedRowIds = mutableListOf<Long>()
 
         database.withTransaction {
             for (draft in drafts) {
@@ -198,7 +244,11 @@ class SnapSpendRepository(private val database: SnapSpendDatabase) {
 
                 val key = draft.duplicateKey
                 val resolvedCatId = resolveCategoryId(draft.category)
-                val normalizedMode = if (draft.paymentMode.equals("CASH", ignoreCase = true)) "CASH" else "ONLINE"
+                val isAtm = draft.isAtmWithdrawal ||
+                    LocalInsightsAndRulesEngine.isAtmCashWithdrawalText(draft.merchant) ||
+                    LocalInsightsAndRulesEngine.isAtmCashWithdrawalText(draft.rawMerchantText) ||
+                    LocalInsightsAndRulesEngine.isAtmCashWithdrawalText(draft.note)
+                val normalizedMode = if (isAtm || draft.paymentMode.equals("CASH", ignoreCase = true)) "CASH" else "ONLINE"
                 if (draft.resolutionMode == ResolutionMode.UPDATE_PENDING_TO_FINAL && draft.existingMatchId != null) {
                     val updatedEntity = TransactionEntity(
                         id = draft.existingMatchId,
@@ -215,7 +265,8 @@ class SnapSpendRepository(private val database: SnapSpendDatabase) {
                         note = draft.note,
                         source = draft.source,
                         duplicateKey = key,
-                        paymentMode = normalizedMode
+                        paymentMode = normalizedMode,
+                        isAtmWithdrawal = isAtm
                     )
                     dao.updateTransaction(updatedEntity)
                     updatedPending++
@@ -234,9 +285,11 @@ class SnapSpendRepository(private val database: SnapSpendDatabase) {
                         note = draft.note,
                         source = draft.source,
                         duplicateKey = key,
-                        paymentMode = normalizedMode
+                        paymentMode = normalizedMode,
+                        isAtmWithdrawal = isAtm
                     )
-                    dao.insertTransaction(entity)
+                    val newId = dao.insertTransaction(entity)
+                    insertedRowIds.add(newId)
                     inserted++
                 }
             }
@@ -245,7 +298,8 @@ class SnapSpendRepository(private val database: SnapSpendDatabase) {
         return ImportSummary(
             insertedCount = inserted,
             updatedPendingCount = updatedPending,
-            skippedDuplicateCount = skipped
+            skippedDuplicateCount = skipped,
+            insertedIds = insertedRowIds
         )
     }
 
@@ -381,6 +435,7 @@ class SnapSpendRepository(private val database: SnapSpendDatabase) {
                 put("duplicateKey", tx.duplicateKey)
                 put("deletedAtMillis", tx.deletedAtMillis ?: JSONObject.NULL)
                 put("paymentMode", tx.paymentMode)
+                put("isAtmWithdrawal", tx.isAtmWithdrawal)
             }
             txArray.put(obj)
         }
@@ -441,7 +496,7 @@ class SnapSpendRepository(private val database: SnapSpendDatabase) {
 
     suspend fun exportTransactionsCsv(): String {
         val sb = StringBuilder()
-        sb.appendLine("Date,Time,Merchant,Category,Type,Amount (Rupees),Amount (Paise),Status,Payment App,Reference Number,Source,Note,Payment Mode")
+        sb.appendLine("Date,Time,Merchant,Category,Type,Amount (Rupees),Amount (Paise),Status,Payment App,Reference Number,Source,Note,Payment Mode,ATM Withdrawal")
         val dateFmt = SimpleDateFormat("yyyy-MM-dd", Locale.US)
         val timeFmt = SimpleDateFormat("HH:mm", Locale.US)
 
@@ -464,7 +519,8 @@ class SnapSpendRepository(private val database: SnapSpendDatabase) {
             sb.append(csvEscape(tx.referenceNumber.orEmpty())).append(',')
             sb.append(csvEscape(tx.source.name)).append(',')
             sb.append(csvEscape(tx.note)).append(',')
-            sb.appendLine(csvEscape(tx.paymentMode))
+            sb.append(csvEscape(tx.paymentMode)).append(',')
+            sb.appendLine(csvEscape(tx.isAtmWithdrawal.toString()))
         }
         return sb.toString()
     }
@@ -567,7 +623,12 @@ class SnapSpendRepository(private val database: SnapSpendDatabase) {
             val source = runCatching { TransactionSource.valueOf(sourceStr.uppercase(Locale.US)) }.getOrDefault(TransactionSource.IMPORT)
             val note = cols.getOrNull(11)?.trim().orEmpty()
             val rawPaymentMode = cols.getOrNull(12)?.trim().orEmpty()
-            val paymentMode = if (rawPaymentMode.equals("CASH", ignoreCase = true)) "CASH" else "ONLINE"
+            val rawAtmCol = cols.getOrNull(13)?.trim().orEmpty()
+            val isAtmWithdrawal = rawAtmCol.equals("true", ignoreCase = true) ||
+                rawAtmCol == "1" ||
+                LocalInsightsAndRulesEngine.isAtmCashWithdrawalText(merchant) ||
+                LocalInsightsAndRulesEngine.isAtmCashWithdrawalText(note)
+            val paymentMode = if (isAtmWithdrawal || rawPaymentMode.equals("CASH", ignoreCase = true)) "CASH" else "ONLINE"
 
             val dupKey = MoneyUtils.buildDuplicateKey(refRaw, timestamp, hasExplicitTime, amountPaise, merchant)
             val resolvedCatId = resolveCategoryId(category)
@@ -588,7 +649,8 @@ class SnapSpendRepository(private val database: SnapSpendDatabase) {
                     createdAt = System.currentTimeMillis(),
                     source = source,
                     duplicateKey = dupKey,
-                    paymentMode = paymentMode
+                    paymentMode = paymentMode,
+                    isAtmWithdrawal = isAtmWithdrawal
                 )
             )
         }
@@ -715,7 +777,11 @@ class SnapSpendRepository(private val database: SnapSpendDatabase) {
             } else {
                 o.optString("paymentMode", "ONLINE")
             }
-            val paymentMode = if (rawPaymentMode.equals("CASH", ignoreCase = true)) "CASH" else "ONLINE"
+            val noteStr = o.optString("note", "")
+            val isAtmWithdrawal = o.optBoolean("isAtmWithdrawal", false) ||
+                LocalInsightsAndRulesEngine.isAtmCashWithdrawalText(merchant) ||
+                LocalInsightsAndRulesEngine.isAtmCashWithdrawalText(noteStr)
+            val paymentMode = if (isAtmWithdrawal || rawPaymentMode.equals("CASH", ignoreCase = true)) "CASH" else "ONLINE"
             TransactionEntity(
                 id = 0L,
                 timestamp = timestamp,
@@ -728,12 +794,13 @@ class SnapSpendRepository(private val database: SnapSpendDatabase) {
                 paymentApp = o.optString("paymentApp", "Unknown"),
                 referenceNumber = refRaw,
                 status = runCatching { TransactionStatus.valueOf(o.optString("status", "SUCCESS")) }.getOrDefault(TransactionStatus.SUCCESS),
-                note = o.optString("note", ""),
+                note = noteStr,
                 createdAt = o.optLong("createdAt", System.currentTimeMillis()),
                 source = runCatching { TransactionSource.valueOf(o.optString("source", "IMPORT")) }.getOrDefault(TransactionSource.IMPORT),
                 duplicateKey = dupKey,
                 deletedAtMillis = deletedAtMillis,
-                paymentMode = paymentMode
+                paymentMode = paymentMode,
+                isAtmWithdrawal = isAtmWithdrawal
             )
         }
 

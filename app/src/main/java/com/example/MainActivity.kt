@@ -354,6 +354,10 @@ fun SnapSpendRootScreen(
     val pendingSharedPayload by viewModel.pendingSharedPayload.collectAsStateWithLifecycle()
     val soundEffectsEnabled by viewModel.soundEffectsEnabled.collectAsStateWithLifecycle()
     val bgmEnabled by viewModel.bgmEnabled.collectAsStateWithLifecycle()
+    val skippedKnownBanner by viewModel.skippedKnownBanner.collectAsStateWithLifecycle()
+    val pdfPasswordPrompt by viewModel.pdfPasswordPrompt.collectAsStateWithLifecycle()
+    val scanLabState by viewModel.scanLabState.collectAsStateWithLifecycle()
+    val cardBillHandlingMode by viewModel.cardBillHandlingMode.collectAsStateWithLifecycle()
 
     androidx.compose.runtime.LaunchedEffect(scanState) {
         when (scanState) {
@@ -476,6 +480,15 @@ fun SnapSpendRootScreen(
     ) { uri ->
         if (uri != null) {
             viewModel.processSelectedUris(listOf(uri))
+        }
+    }
+
+    // Scan Lab Multi-File Picker (up to 20 screenshots or PDFs, zero DB writes)
+    val scanLabFilesLauncher = rememberLauncherForActivityResult(
+        contract = ActivityResultContracts.OpenMultipleDocuments()
+    ) { uris ->
+        if (uris.isNotEmpty()) {
+            viewModel.runScanLab(uris.take(20))
         }
     }
 
@@ -818,6 +831,21 @@ fun SnapSpendRootScreen(
                                             )
                                             showTransactionEditor = true
                                         },
+                                        onCashWalletClick = {
+                                            showSmartCashDialog = true
+                                        },
+                                        skippedKnownBanner = skippedKnownBanner,
+                                        onOpenSkippedKnownTransaction = { txId ->
+                                            viewModel.dismissSkippedKnownBanner()
+                                            val matchedTx = uiState.allTransactions.firstOrNull { it.id == txId }
+                                            if (matchedTx != null) {
+                                                editingTransaction = matchedTx
+                                                showTransactionEditor = true
+                                            } else {
+                                                currentTab = SnapSpendTab.TRANSACTIONS
+                                            }
+                                        },
+                                        onDismissSkippedKnownBanner = viewModel::dismissSkippedKnownBanner,
                                         topContentPadding = topContentPadding,
                                         bottomContentPadding = bottomContentPadding
                                     )
@@ -847,7 +875,8 @@ fun SnapSpendRootScreen(
                                                 note = "ATM Withdrawal / Cash Wallet Top-Up",
                                                 createdAt = nowMillis,
                                                 source = TransactionSource.MANUAL,
-                                                paymentMode = "CASH"
+                                                paymentMode = "CASH",
+                                                isAtmWithdrawal = true
                                             )
                                             showTransactionEditor = true
                                         },
@@ -938,6 +967,12 @@ fun SnapSpendRootScreen(
                                             onReportCopied = {
                                                 viewModel.showToast("Data check report copied to clipboard!")
                                             },
+                                            scanLabState = scanLabState,
+                                            onPickScanLabFilesClick = {
+                                                scanLabFilesLauncher.launch(arrayOf("image/*", "application/pdf"))
+                                            },
+                                            onMarkScanLabVerdict = viewModel::markScanLabVerdict,
+                                            onClearScanLab = viewModel::clearScanLab,
                                             topContentPadding = topContentPadding,
                                             bottomContentPadding = bottomContentPadding
                                         )
@@ -1004,6 +1039,8 @@ fun SnapSpendRootScreen(
                                             onOpenAppSettings = {
                                                 openAppSystemSettings()
                                             },
+                                            cardBillHandlingMode = cardBillHandlingMode,
+                                            onCardBillHandlingModeChange = viewModel::setCardBillHandlingMode,
                                             topContentPadding = topContentPadding,
                                             bottomContentPadding = bottomContentPadding
                                         )
@@ -1039,7 +1076,9 @@ fun SnapSpendRootScreen(
                 scanState = scanState,
                 categories = uiState.categories,
                 onDismiss = viewModel::dismissScanFlow,
+                onCancelScan = viewModel::cancelActiveScan,
                 onRetry = viewModel::retryLastScan,
+                onRetryFailedUris = viewModel::retryFailedBatchUris,
                 onQueueFailedScan = viewModel::queueCurrentFailedScan,
                 onPickAnotherImage = {
                     viewModel.dismissScanFlow()
@@ -1051,6 +1090,10 @@ fun SnapSpendRootScreen(
                 onToggleSkip = viewModel::toggleDraftSkipped,
                 onApplyEqualSplit = viewModel::applyDraftEqualSplit,
                 onToggleLineItem = viewModel::toggleDraftLineItem,
+                onConfirmAllVerified = {
+                    soundManager?.playCoin()
+                    viewModel.confirmAllVerifiedReviewDrafts()
+                },
                 onConfirmAll = {
                     soundManager?.playCoin()
                     viewModel.confirmAllReviewDrafts()
@@ -1134,14 +1177,17 @@ fun SnapSpendRootScreen(
         )
     }
 
-    // Smart Cash Log (One-Line AI Auto-Sort) Dialog
+    // Smart Cash Log (One-Line 0-API Fast Parser + AI Fallback & Wallet Adjust) Dialog
     if (showSmartCashDialog) {
         SmartCashLogDialog(
             onDismiss = { showSmartCashDialog = false },
             onSubmitCashNote = { cashNote, cashType ->
-                performWithFirstScanNoticeCheck {
-                    viewModel.processSmartCashLogWithGemini(cashNote, cashType)
-                }
+                viewModel.processSmartCashLogWithGemini(cashNote, cashType)
+            },
+            currentCashInHandPaise = uiState.cashInHandPaise,
+            onSetWalletBalancePaise = viewModel::setManualCashWalletBalancePaise,
+            onTopUpWalletPaise = { addPaise, recordAtm ->
+                viewModel.topUpCashWalletBalancePaise(addPaise, recordAtm)
             }
         )
     }
@@ -1159,6 +1205,85 @@ fun SnapSpendRootScreen(
             onDelete = { id ->
                 soundManager?.playDelete()
                 viewModel.deleteTransaction(id)
+            }
+        )
+    }
+
+    // Password-Protected Bank Statement PDF Unlock Dialog
+    val activePdfPrompt = pdfPasswordPrompt
+    if (activePdfPrompt != null) {
+        var passwordInput by remember(activePdfPrompt.uri) { mutableStateOf("") }
+        AlertDialog(
+            onDismissRequest = { viewModel.dismissPdfPasswordPrompt() },
+            modifier = Modifier.dialogScaleFadeEntrance(),
+            containerColor = tokens.cardSurface,
+            titleContentColor = tokens.primaryText,
+            textContentColor = tokens.primaryText,
+            title = {
+                Text(
+                    text = "UNLOCK STATEMENT PDF",
+                    style = CondensedCardTitleStyle.copy(fontSize = 24.sp),
+                    color = tokens.primaryText
+                )
+            },
+            text = {
+                Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
+                    Text(
+                        text = "This bank statement PDF is password-protected. Enter the PDF password to unlock and scan it on your device.",
+                        style = MaterialTheme.typography.bodyMedium,
+                        color = tokens.secondaryText
+                    )
+                    if (activePdfPrompt.isRetryError) {
+                        Text(
+                            text = "Incorrect password. Please check the PDF password and try again.",
+                            style = MaterialTheme.typography.labelMedium.copy(fontWeight = FontWeight.ExtraBold),
+                            color = EditorialCoral
+                        )
+                    }
+                    OutlinedTextField(
+                        value = passwordInput,
+                        onValueChange = { passwordInput = it },
+                        label = { Text("PDF Password", color = tokens.secondaryText) },
+                        singleLine = true,
+                        colors = OutlinedTextFieldDefaults.colors(
+                            focusedTextColor = tokens.primaryText,
+                            unfocusedTextColor = tokens.primaryText,
+                            focusedBorderColor = if (isDark) SunnyYellow else InkBlack,
+                            unfocusedBorderColor = tokens.subtleDivider
+                        ),
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .testTag("pdf_password_input")
+                    )
+                }
+            },
+            confirmButton = {
+                Button(
+                    onClick = { viewModel.submitPdfPasswordAndRescan(passwordInput) },
+                    enabled = passwordInput.isNotBlank(),
+                    colors = ButtonDefaults.buttonColors(
+                        containerColor = SunnyYellow,
+                        contentColor = InkBlack
+                    ),
+                    border = BorderStroke(1.8.dp, InkBlack),
+                    modifier = Modifier.testTag("pdf_password_unlock_button")
+                ) {
+                    Text(
+                        text = "UNLOCK & SCAN",
+                        style = MaterialTheme.typography.labelLarge.copy(fontWeight = FontWeight.ExtraBold)
+                    )
+                }
+            },
+            dismissButton = {
+                TextButton(
+                    onClick = { viewModel.dismissPdfPasswordPrompt() }
+                ) {
+                    Text(
+                        text = "CANCEL",
+                        color = tokens.secondaryText,
+                        style = MaterialTheme.typography.labelLarge.copy(fontWeight = FontWeight.Bold)
+                    )
+                }
             }
         )
     }

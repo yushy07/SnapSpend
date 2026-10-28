@@ -268,7 +268,8 @@ interface TransactionDao {
                     category = if (incoming.category.isNotBlank() && incoming.category != "Other") incoming.category else existing.category,
                     categoryId = if (incoming.categoryId != 0L) incoming.categoryId else existing.categoryId,
                     note = incoming.note.ifBlank { existing.note },
-                    paymentMode = if (incoming.paymentMode == "CASH") "CASH" else existing.paymentMode
+                    paymentMode = if (incoming.paymentMode == "CASH" || incoming.isAtmWithdrawal || existing.isAtmWithdrawal) "CASH" else existing.paymentMode,
+                    isAtmWithdrawal = incoming.isAtmWithdrawal || existing.isAtmWithdrawal
                 )
                 updateTransaction(upgraded)
                 existing.id
@@ -355,6 +356,7 @@ interface TransactionDao {
         WHERE deletedAtMillis IS NULL
           AND status = 'SUCCESS'
           AND type = 'EXPENSE'
+          AND isAtmWithdrawal = 0
           AND timestamp BETWEEN :startMillis AND :endMillis
         """
     )

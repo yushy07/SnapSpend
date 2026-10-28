@@ -2,29 +2,33 @@ package com.example.data.ai
 
 import android.content.Context
 import android.graphics.Bitmap
-import android.graphics.BitmapFactory
 import android.graphics.Canvas
 import android.graphics.Color
 import android.graphics.Paint
 import android.graphics.RectF
 import android.graphics.Typeface
-import android.graphics.pdf.PdfRenderer
+import android.net.ConnectivityManager
+import android.net.NetworkCapabilities
 import android.net.Uri
+import android.os.SystemClock
 import android.util.Log
+import com.example.data.local.CardBillHandlingMode
 import com.example.data.local.CategoryEntity
+import com.example.data.local.ConfirmedScanRecord
 import com.example.data.local.DefaultCategories
+import com.example.data.local.MerchantMemoryEntity
+import com.example.data.local.ScanLogEntry
+import com.example.data.local.ScanPath
+import com.example.data.local.TransactionEntity
 import com.example.data.local.TransactionSource
 import com.example.data.local.TransactionStatus
 import com.example.data.local.TransactionType
 import com.example.data.rules.DraftTransaction
 import com.example.data.rules.ReceiptLineItem
 import com.example.util.MoneyUtils
-import com.example.data.local.MerchantMemoryEntity
 import com.google.firebase.Firebase
 import com.google.firebase.ai.ai
 import com.google.firebase.ai.type.Schema
-import com.google.firebase.ai.type.ThinkingLevel
-import com.google.firebase.ai.type.content
 import com.google.firebase.ai.type.generationConfig
 import com.google.firebase.ai.type.thinkingConfig
 import kotlinx.coroutines.CancellationException
@@ -43,261 +47,945 @@ import org.json.JSONObject
 import java.text.SimpleDateFormat
 import java.util.Date
 import java.util.Locale
-import java.util.concurrent.atomic.AtomicInteger
-import kotlin.math.min
 
 private const val TAG = "GeminiReceiptExtractor"
+const val GEMINI_MODEL_NAME = "gemini-3.8-flash"
+private const val TEXT_TIMEOUT_MS = 20_000L
+private const val TEXT_MAX_ATTEMPTS = 2
+private const val PDF_PAGE_CHUNK_SIZE = 2
+private const val STATEMENT_ROW_CHUNK_SIZE = 40
 
-sealed interface ExtractionResult {
-    data class Success(val drafts: List<DraftTransaction>) : ExtractionResult
-    data class UnreadableOrNoPayments(val reason: String) : ExtractionResult
-    data class Error(val message: String) : ExtractionResult
+enum class AiErrorKind {
+    RETRYABLE_NETWORK_OR_503,
+    RATE_LIMITED_429,
+    FATAL_CLIENT_ERROR
 }
 
+sealed interface ExtractionResult {
+    data class Success(
+        val drafts: List<DraftTransaction>,
+        val logEntry: ScanLogEntry? = null,
+        val skippedPdfPages: Int = 0
+    ) : ExtractionResult
+
+    data class SkippedKnown(
+        val existingTransactionId: Long?,
+        val amountPaise: Long,
+        val merchant: String,
+        val dateFormatted: String,
+        val logEntry: ScanLogEntry
+    ) : ExtractionResult
+
+    data class RateLimited(
+        val message: String = "AI limit reached. Queued, will retry later",
+        val logEntry: ScanLogEntry? = null
+    ) : ExtractionResult
+
+    data class PdfPasswordRequired(
+        val uri: Uri,
+        val isInvalidPasswordAttempt: Boolean = false
+    ) : ExtractionResult
+
+    data class UnreadableOrNoPayments(
+        val reason: String,
+        val logEntry: ScanLogEntry? = null
+    ) : ExtractionResult
+
+    data class Error(
+        val message: String,
+        val logEntry: ScanLogEntry? = null
+    ) : ExtractionResult
+}
+
+data class PerFileScanOutcome(
+    val uri: Uri,
+    val result: ExtractionResult,
+    val logEntry: ScanLogEntry
+)
+
 /**
- * Hybrid Local-First receipt, UPI screenshot, multi-page PDF, and natural-language reader.
- *
- * Uses Google ML Kit on-device OCR (<200ms) + 0-API Regex Fast Path (<50ms) + ultra-fast
- * text-only Gemini 3.8-Flash (thinkingBudget = 0) with compressed multimodal vision fallback.
+ * Shared compact schema builder, error classifier, and JSON parser for both text and vision Gemini calls
+ * (Part 3.2 & Part 3.3).
  */
-class GeminiReceiptExtractor(private val context: Context) {
+object GeminiCompactSchema {
 
-    val localExtractor by lazy { LocalDocumentExtractor(context) }
-    val visionFallback by lazy { CompressedVisionFallback(context) }
-
-    private suspend fun <T> retryWithExponentialBackoff(
-        maxAttempts: Int = 3,
-        initialDelayMs: Long = 2000L,
-        block: suspend (attempt: Int) -> T
-    ): T {
-        var currentDelay = initialDelayMs
-        var lastException: Exception? = null
-        for (attempt in 1..maxAttempts) {
-            try {
-                return block(attempt)
-            } catch (e: CancellationException) {
-                if (e !is TimeoutCancellationException) throw e
-                lastException = e
-            } catch (e: Exception) {
-                val msg = e.message ?: ""
-                val isHighDemand = msg.contains("503") || msg.contains("429") ||
-                        msg.contains("ResourceExhausted", ignoreCase = true) ||
-                        msg.contains("ServiceUnavailable", ignoreCase = true) ||
-                        msg.contains("busy", ignoreCase = true) ||
-                        msg.contains("too many requests", ignoreCase = true) ||
-                        msg.contains("overloaded", ignoreCase = true)
-
-                lastException = e
-                if (attempt < maxAttempts) {
-                    Log.w(TAG, "Gemini call attempt $attempt failed (high demand/error: $msg), retrying in ${currentDelay}ms...", e)
-                    delay(currentDelay)
-                    currentDelay *= 2L
-                    continue
-                }
-            }
-        }
-        throw lastException ?: IllegalStateException("AI request failed after $maxAttempts attempts.")
-    }
-
-    private fun buildExtractionSchema(allowedCategoryNames: List<String>): Schema {
-        val safeCategories = allowedCategoryNames.ifEmpty {
+    fun buildCategoryIdLegend(allowedCategories: List<String>): Pair<Map<String, String>, String> {
+        val safe = allowedCategories.ifEmpty {
             DefaultCategories.ALL_DEFAULTS.map { it.name }
         }.distinct()
+        val map = LinkedHashMap<String, String>()
+        val legendParts = mutableListOf<String>()
+        safe.forEachIndexed { index, name ->
+            val id = "c${index + 1}"
+            map[id] = name
+            legendParts.add("$id=$name")
+        }
+        return map to legendParts.joinToString(", ")
+    }
 
+    fun buildCompactSchema(categoryIds: List<String>): Schema {
+        val safeIds = categoryIds.ifEmpty { listOf("c1") }
         val lineItemSchema = Schema.obj(
             properties = mapOf(
-                "itemName" to Schema.string(
-                    description = "Name of the individual purchased item on an itemized bill or receipt"
-                ),
-                "quantity" to Schema.integer(
-                    description = "Quantity of this item (default 1)"
-                ),
-                "pricePaise" to Schema.long(
-                    description = "Total price for this line item in whole Indian paise (e.g. ₹155.50 -> 15550)"
-                ),
-                "priceText" to Schema.string(
-                    description = "Exact price text for this line item in Rupees (e.g. '155.50')"
-                )
+                "n" to Schema.string(description = "Item name"),
+                "q" to Schema.integer(description = "Quantity (default 1)"),
+                "a" to Schema.long(description = "Total line price in whole paise")
             )
         )
 
-        val paymentItemSchema = Schema.obj(
+        val itemSchema = Schema.obj(
             properties = mapOf(
-                "dateIso" to Schema.string(
-                    description = "Payment date in YYYY-MM-DD format, or 'unknown' if not visible"
-                ),
-                "time24h" to Schema.string(
-                    description = "Payment time in 24-hour HH:mm format (e.g. '14:35'), or 'unknown' if not visible"
-                ),
-                "amountPaise" to Schema.long(
-                    description = "Exact total payment amount in whole Indian paise (1 Rupee = 100 paise, e.g., ₹150.50 is 15050, ₹20 is 2000). Return 0 if unknown."
-                ),
-                "amountText" to Schema.string(
-                    description = "Exact total amount text in Rupees as written (e.g. '150.50' or '20')"
-                ),
-                "type" to Schema.enumeration(
+                "m" to Schema.string(description = "Clean human-readable merchant or person name, or 'unknown'"),
+                "a" to Schema.long(description = "Exact amount in whole Indian paise (₹150.50 -> 15050). Return 0 if unknown."),
+                "d" to Schema.string(description = "Date in YYYY-MM-DD, or 'unknown' if not visible"),
+                "tm" to Schema.string(description = "Time in 24h HH:mm, or 'unknown' if not visible"),
+                "t" to Schema.enumeration(
                     values = listOf("EXPENSE", "EARNING", "TRANSFER"),
-                    description = "EXPENSE for money out, EARNING for money in or refunds/cashback, TRANSFER for money moved between the user's own accounts"
+                    description = "EXPENSE=money out, EARNING=money received/refund/cashback, TRANSFER=own account or ATM cash withdrawal"
                 ),
-                "merchant" to Schema.string(
-                    description = "Clean, human-readable merchant or person name (e.g. clean 'UPI/412983/SWIGGY INSTAMART/BLR' into 'Swiggy Instamart'), or 'unknown' if unreadable"
+                "p" to Schema.string(
+                    description = "'CASH' for cash/ATM withdrawal, else app/method name ('GPay','PhonePe','Paytm','CRED','Card','UPI','Bank')"
                 ),
-                "rawMerchantText" to Schema.string(
-                    description = "Original uncleaned bank/UPI descriptor if it contained cryptic codes (e.g. 'UPI/412983/SWIGGY INSTAMART/BLR'), or empty string if already clean"
-                ),
-                "paymentApp" to Schema.string(
-                    description = "Payment app or bank name (e.g. GPay, PhonePe, Paytm, HDFC Bank, SBI, Amazon Pay, Cash, Unknown)"
-                ),
-                "referenceNumber" to Schema.string(
-                    description = "UPI transaction ID, UTR, or bank reference number if visible, else 'unknown'"
-                ),
-                "status" to Schema.enumeration(
+                "s" to Schema.enumeration(
                     values = listOf("SUCCESS", "FAILED", "PENDING"),
-                    description = "Payment status: SUCCESS, FAILED, or PENDING"
+                    description = "Payment status"
                 ),
-                "suggestedCategory" to Schema.enumeration(
-                    values = safeCategories,
-                    description = "Category strictly chosen from the allowed category list"
+                "r" to Schema.string(
+                    description = "12-digit UPI UTR or bank reference number if visible, else 'unknown'"
                 ),
-                "confidence" to Schema.double(
-                    description = "Confidence score from 0.0 (unsure/blurry) to 1.0 (crystal clear)"
+                "c" to Schema.enumeration(
+                    values = safeIds,
+                    description = "Category ID from the legend"
                 ),
-                "note" to Schema.string(
-                    description = "Brief note or remark visible on the payment, or empty string"
+                "sp" to Schema.integer(
+                    description = "Equal split count if explicitly mentioned (e.g. 'split 2 ways' -> 2), else 1"
                 ),
-                "suggestedSplitWays" to Schema.integer(
-                    description = "If the user or receipt explicitly mentions splitting equally among N people (e.g. 'split 2 ways' -> 2), return N; otherwise return 1"
-                ),
-                "paymentMode" to Schema.enumeration(
-                    values = listOf("ONLINE", "CASH"),
-                    description = "CASH for physical cash payments or ATM cash withdrawals (ATM WDL, CASH WITHDRAWAL, ATW); ONLINE for UPI, cards, netbanking, or bank transfers"
-                ),
-                "lineItems" to Schema.array(
+                "li" to Schema.array(
                     items = lineItemSchema,
-                    description = "Individual itemized receipt lines if visible on the bill/receipt; empty array if single UPI summary"
+                    description = "Itemized bill lines if visible, else empty array"
                 )
             )
         )
 
         return Schema.obj(
             properties = mapOf(
-                "isReadablePaymentDocument" to Schema.boolean(
-                    description = "True if the input contains at least one readable payment, receipt, statement entry, or expense description; false if unreadable or unrelated"
-                ),
-                "unreadableReason" to Schema.string(
-                    description = "If isReadablePaymentDocument is false, explain clearly why"
-                ),
-                "payments" to Schema.array(
-                    items = paymentItemSchema,
-                    description = "Every payment transaction extracted"
-                )
+                "readable" to Schema.boolean(description = "True if input has at least one readable payment"),
+                "reason" to Schema.string(description = "Reason if readable is false"),
+                "items" to Schema.array(items = itemSchema, description = "Extracted payments")
             )
         )
     }
 
+    fun classifyAiError(e: Exception): AiErrorKind {
+        val msg = (e.message ?: "").lowercase(Locale.US)
+        return when {
+            msg.contains("429") ||
+                msg.contains("resourceexhausted") ||
+                msg.contains("resource_exhausted") ||
+                msg.contains("quota") ||
+                msg.contains("too many requests") ||
+                msg.contains("rate limit") -> AiErrorKind.RATE_LIMITED_429
+
+            msg.contains("400") ||
+                msg.contains("403") ||
+                msg.contains("404") ||
+                msg.contains("invalidargument") ||
+                msg.contains("permissiondenied") ||
+                msg.contains("notfound") ||
+                msg.contains("api key not valid") -> AiErrorKind.FATAL_CLIENT_ERROR
+
+            else -> AiErrorKind.RETRYABLE_NETWORK_OR_503
+        }
+    }
+
+    fun formatFatalErrorMessage(e: Exception): String {
+        val msg = e.message.orEmpty()
+        return when {
+            msg.contains("400") || msg.contains("InvalidArgument", ignoreCase = true) ->
+                "AI rejected the request format (400 Bad Request). Please try another file."
+            msg.contains("403") || msg.contains("PermissionDenied", ignoreCase = true) ->
+                "AI access denied (403 Forbidden). Please check your Firebase AI configuration."
+            msg.contains("404") || msg.contains("NotFound", ignoreCase = true) ->
+                "AI model '$GEMINI_MODEL_NAME' was not found (404)."
+            else -> e.localizedMessage ?: "Couldn't reach Gemini AI. Tap Try Again or Queue Scan."
+        }
+    }
+
     /**
-     * High-Speed Hybrid Local-First extraction:
-     * Phase 1: Local on-device ML Kit OCR (<200ms, 0 tokens)
-     * Phase 2: Local Regex noise filter & 0-API Fast Path (<50ms, 0 tokens)
-     * Phase 3: Ultra-Fast Text-Only Gemini 3.8-Flash (thinkingBudget = 0) with multi-row batching
-     * Phase 4: Compressed Multimodal Vision Fallback safety net
+     * Parses both the compact short-key schema (`readable`, `reason`, `items`: `m,a,d,tm,t,p,s,r,c,sp,li`)
+     * and the legacy long-key schema (`isReadablePaymentDocument`, `payments`) seamlessly.
+     */
+    fun parseCompactOrLegacyJson(
+        jsonString: String,
+        source: TransactionSource,
+        allowedCategories: List<String>,
+        categoryIdMap: Map<String, String> = emptyMap(),
+        defaultPaymentMode: String = "ONLINE",
+        defaultCashType: TransactionType? = null,
+        missingDateDefaultsToToday: Boolean = false,
+        scanSha256Hash: String? = null
+    ): ExtractionResult {
+        val root = JSONObject(jsonString)
+        val isReadable = if (root.has("readable")) {
+            root.optBoolean("readable", true)
+        } else {
+            root.optBoolean("isReadablePaymentDocument", true)
+        }
+        val unreadableReason = root.optString("reason", root.optString("unreadableReason", ""))
+        val itemsArray = root.optJSONArray("items") ?: root.optJSONArray("payments")
+
+        if (!isReadable || itemsArray == null || itemsArray.length() == 0) {
+            val msg = unreadableReason.ifBlank {
+                "Couldn't read a payment from this input. Make sure it clearly shows a payment or receipt."
+            }
+            return ExtractionResult.UnreadableOrNoPayments(msg)
+        }
+
+        val drafts = mutableListOf<DraftTransaction>()
+        for (i in 0 until itemsArray.length()) {
+            val item = itemsArray.optJSONObject(i) ?: continue
+
+            val rawDate = item.optString("d", item.optString("dateIso", "unknown")).trim()
+            val rawTime = item.optString("tm", item.optString("time24h", "unknown")).trim()
+
+            // Section C.7: If no date is found ("unknown"), mark dateFound = false and preselect today
+            // (for typed natural-language notes where missingDateDefaultsToToday = true, dateFound is true).
+            val isDateUnknown = rawDate.isBlank() ||
+                rawDate.equals("unknown", ignoreCase = true) ||
+                rawDate.equals("null", ignoreCase = true)
+            val dateFound = !isDateUnknown || missingDateDefaultsToToday
+            val (timestampMillis, hasExplicitTime) = if (isDateUnknown) {
+                MoneyUtils.parseDateAndTime(MoneyUtils.formatIsoDate(System.currentTimeMillis()), rawTime)
+            } else {
+                // Also support flexible Indian date strings if AI returned "28 Oct 2026" instead of YYYY-MM-DD
+                val isoCandidate = if (Regex("""^\d{4}-\d{2}-\d{2}$""").matches(rawDate)) {
+                    rawDate
+                } else {
+                    MoneyUtils.parseFlexibleIndianDate(rawDate).dateIso ?: rawDate
+                }
+                MoneyUtils.parseDateAndTime(isoCandidate, rawTime)
+            }
+
+            val amountText = item.optString("amountText", "")
+            val amountFromText = MoneyUtils.parseRupeesToPaise(amountText)
+            val amountFromLong = if (item.has("a")) item.optLong("a", 0L) else item.optLong("amountPaise", 0L)
+            val finalAmountPaise = when {
+                amountFromText != null && amountFromText > 0L -> amountFromText
+                amountFromLong > 0L -> amountFromLong
+                else -> 0L
+            }
+
+            val rawTypeStr = item.optString("t", item.optString("type", defaultCashType?.name ?: "EXPENSE")).uppercase(Locale.US)
+            val normalizedTypeStr = if (rawTypeStr == "INCOME") "EARNING" else rawTypeStr
+            val parsedType = runCatching { TransactionType.valueOf(normalizedTypeStr) }
+                .getOrDefault(defaultCashType ?: TransactionType.EXPENSE)
+
+            val rawMerchantField = item.optString("m", item.optString("merchant", "unknown")).trim().ifBlank { "unknown" }
+            val explicitRawText = item.optString("rawMerchantText", "").trim()
+                .takeIf { !it.equals("unknown", ignoreCase = true) }
+                .orEmpty()
+            val (cleanedMerchant, fallbackRaw) = MoneyUtils.cleanRawUpiOrBankMerchant(rawMerchantField)
+            val finalRawMerchant = explicitRawText.ifBlank { fallbackRaw }
+
+            val note = item.optString("note", "").takeIf { !it.equals("unknown", ignoreCase = true) }.orEmpty()
+            val rawMethodOrMode = item.optString("p", item.optString("paymentMode", item.optString("paymentApp", defaultPaymentMode))).trim()
+
+            val isAtmWithdrawal = item.optBoolean("isAtmWithdrawal", false) ||
+                LocalDraftVerifier.isAtmWithdrawalContext("$rawMerchantField $finalRawMerchant $note $rawMethodOrMode")
+
+            val type = if (isAtmWithdrawal) TransactionType.TRANSFER else parsedType
+            val isCashMode = isAtmWithdrawal ||
+                defaultPaymentMode.equals("CASH", ignoreCase = true) ||
+                rawMethodOrMode.equals("CASH", ignoreCase = true) ||
+                item.optString("paymentMode", "").equals("CASH", ignoreCase = true)
+            val resolvedPaymentMode = if (isCashMode) "CASH" else "ONLINE"
+
+            val paymentApp = when {
+                resolvedPaymentMode == "CASH" -> "Cash"
+                rawMethodOrMode.isNotBlank() &&
+                    !rawMethodOrMode.equals("ONLINE", ignoreCase = true) &&
+                    !rawMethodOrMode.equals("unknown", ignoreCase = true) -> rawMethodOrMode
+                else -> item.optString("paymentApp", "UPI").ifBlank { "UPI" }
+            }
+
+            val refRaw = item.optString("r", item.optString("referenceNumber", "unknown")).trim()
+            val referenceNumber = if (refRaw.equals("unknown", ignoreCase = true) || refRaw.equals("null", ignoreCase = true) || refRaw.isBlank()) {
+                null
+            } else {
+                refRaw
+            }
+
+            val statusStr = item.optString("s", item.optString("status", "SUCCESS")).uppercase(Locale.US)
+            val status = runCatching { TransactionStatus.valueOf(statusStr) }.getOrDefault(TransactionStatus.SUCCESS)
+
+            val rawCatCode = item.optString("c", item.optString("suggestedCategory", "Other")).trim()
+            val mappedCategoryName = categoryIdMap[rawCatCode.lowercase(Locale.US)] ?: rawCatCode
+            val validCategory = when {
+                isAtmWithdrawal || type == TransactionType.TRANSFER -> "Transfers"
+                else -> allowedCategories.firstOrNull { it.equals(mappedCategoryName, ignoreCase = true) }
+                    ?: DefaultCategories.ALL_DEFAULTS.firstOrNull { it.name.equals(mappedCategoryName, ignoreCase = true) }?.name
+                    ?: if (type == TransactionType.EARNING) "Other Income" else "Other"
+            }
+
+            val confidence = item.optDouble("confidence", 0.88).toFloat().coerceIn(0f, 1f)
+            val suggestedSplitWays = item.optInt("sp", item.optInt("suggestedSplitWays", 1)).coerceIn(1, 20)
+
+            val lineItemsArray = item.optJSONArray("li") ?: item.optJSONArray("lineItems")
+            val parsedLineItems = mutableListOf<ReceiptLineItem>()
+            if (lineItemsArray != null) {
+                for (j in 0 until lineItemsArray.length()) {
+                    val liObj = lineItemsArray.optJSONObject(j) ?: continue
+                    val liName = liObj.optString("n", liObj.optString("itemName", "")).trim()
+                    if (liName.isEmpty() || liName.equals("unknown", ignoreCase = true)) continue
+                    val liQty = liObj.optInt("q", liObj.optInt("quantity", 1)).coerceAtLeast(1)
+                    val liPriceText = liObj.optString("priceText", "")
+                    val liPaise = MoneyUtils.parseRupeesToPaise(liPriceText)
+                        ?: if (liObj.has("a")) liObj.optLong("a", 0L) else liObj.optLong("pricePaise", 0L)
+                    if (liPaise > 0L) {
+                        parsedLineItems.add(
+                            ReceiptLineItem(
+                                itemName = liName,
+                                quantity = liQty,
+                                pricePaise = liPaise,
+                                isSelectedForSplit = true
+                            )
+                        )
+                    }
+                }
+            }
+
+            val baseDraft = DraftTransaction(
+                timestamp = timestampMillis,
+                hasExplicitTime = hasExplicitTime,
+                amountPaise = finalAmountPaise,
+                originalAmountPaise = finalAmountPaise,
+                type = type,
+                merchant = if (isAtmWithdrawal && (cleanedMerchant.isBlank() || cleanedMerchant.equals("unknown", ignoreCase = true))) {
+                    "ATM Cash Withdrawal"
+                } else {
+                    cleanedMerchant
+                },
+                rawMerchantText = finalRawMerchant,
+                category = validCategory,
+                paymentApp = paymentApp,
+                referenceNumber = referenceNumber,
+                status = status,
+                note = note,
+                source = source,
+                confidence = confidence,
+                lineItems = parsedLineItems,
+                paymentMode = resolvedPaymentMode,
+                isAtmWithdrawal = isAtmWithdrawal,
+                dateFound = dateFound,
+                scanSha256Hash = scanSha256Hash
+            )
+
+            val finalDraft = if (suggestedSplitWays > 1) {
+                baseDraft.applyEqualSplit(suggestedSplitWays)
+            } else {
+                baseDraft
+            }
+            drafts.add(finalDraft)
+        }
+
+        return ExtractionResult.Success(drafts)
+    }
+}
+
+/**
+ * Hybrid Local-First receipt, UPI screenshot, multi-page PDF, and natural-language reader.
+ */
+class GeminiReceiptExtractor(private val context: Context) {
+
+    val localExtractor by lazy { LocalDocumentExtractor(context) }
+    val visionFallback by lazy { CompressedVisionFallback(context) }
+
+    fun isDeviceOnline(): Boolean {
+        return try {
+            val cm = context.getSystemService(Context.CONNECTIVITY_SERVICE) as? ConnectivityManager ?: return true
+            val net = cm.activeNetwork ?: return false
+            val caps = cm.getNetworkCapabilities(net) ?: return false
+            caps.hasCapability(NetworkCapabilities.NET_CAPABILITY_INTERNET)
+        } catch (_: Exception) {
+            true
+        }
+    }
+
+    /**
+     * Processes a single URI end-to-end (Part 2.1):
+     * 1. Native PDF text layer or on-device ML Kit OCR
+     * 2. Local regex + `SKIPPED_KNOWN` check (UTR match in Room DB or SHA-256 hash match in DataStore)
+     * 3. 0-API Fast Path check (Section C.9)
+     * 4. Statement Line Filter + chunked Gemini Text calls (20s timeout, max 2 attempts)
+     * 5. Per-file Vision Fallback if image OCR/text failed
+     * 6. LocalDraftVerifier verification & deterministic section rules
+     */
+    suspend fun extractSingleUriWithPipeline(
+        uri: Uri,
+        categories: List<CategoryEntity>,
+        merchantMemories: List<MerchantMemoryEntity>,
+        pdfPassword: String? = null,
+        cardBillMode: CardBillHandlingMode = CardBillHandlingMode.ASK,
+        findExistingByRef: suspend (String) -> TransactionEntity? = { null },
+        findConfirmedHash: suspend (String) -> ConfirmedScanRecord? = { null },
+        onProgress: (statusText: String) -> Unit = {}
+    ): PerFileScanOutcome = withContext(Dispatchers.IO) {
+        val totalStart = SystemClock.elapsedRealtime()
+        var readMs = 0L
+        var ocrMs = 0L
+        var regexMs = 0L
+        var aiTextMs = 0L
+        var visionMs = 0L
+        var retries = 0
+        var promptTok = 0
+        var outputTok = 0
+        var preFilterTok = 0
+        var postFilterTok = 0
+
+        try {
+            // STEP 1: On-Device Extraction (PDFBox native text first, ML Kit OCR fallback)
+            onProgress("Reading file on device...")
+            val ocrResult = try {
+                localExtractor.extractSingleUri(uri, pdfPassword) { readPages, totalPages ->
+                    if (totalPages > 1) {
+                        onProgress("Read $readPages of $totalPages pages...")
+                    }
+                }
+            } catch (pwdEx: PdfPasswordRequiredException) {
+                val totalElapsed = (SystemClock.elapsedRealtime() - totalStart).coerceAtLeast(1L)
+                val log = ScanLogEntry(totalMs = totalElapsed, path = ScanPath.FAST_PATH)
+                return@withContext PerFileScanOutcome(
+                    uri = uri,
+                    result = ExtractionResult.PdfPasswordRequired(uri, pwdEx.isInvalidPasswordAttempt),
+                    logEntry = log
+                )
+            }
+            readMs = ocrResult.readFileMs
+            ocrMs = ocrResult.ocrTextMs
+
+            val source = if (ocrResult.isPdf) TransactionSource.PDF else TransactionSource.SCREENSHOT
+
+            // STEP 2: Local Regex Pre-Processor & SKIPPED_KNOWN Check
+            val regexStart = SystemClock.elapsedRealtime()
+            val regexResult = UpiRegexPreProcessor.process(
+                rawOcrText = ocrResult.fullCleanedText,
+                categories = categories,
+                merchantMemories = merchantMemories,
+                source = source
+            )
+            regexMs = (SystemClock.elapsedRealtime() - regexStart).coerceAtLeast(1L)
+
+            val cleanedText = regexResult.cleanedText
+            val sha256Hash = if (cleanedText.length >= 15) MoneyUtils.sha256Hex(cleanedText) else ""
+
+            // Section D: Check if UTR or SHA-256 hash is already saved before making any network call!
+            if (!regexResult.isMultiRowLikely && ocrResult.pages.size <= 1) {
+                val refCandidate = regexResult.detectedAnchors?.utrOrRef
+                if (!refCandidate.isNullOrBlank()) {
+                    val existingTx = findExistingByRef(refCandidate)
+                    if (existingTx != null) {
+                        val totalElapsed = (SystemClock.elapsedRealtime() - totalStart).coerceAtLeast(1L)
+                        val log = ScanLogEntry(
+                            readFileMs = readMs,
+                            ocrTextMs = ocrMs,
+                            regexMs = regexMs,
+                            totalMs = totalElapsed,
+                            path = ScanPath.SKIPPED_KNOWN
+                        )
+                        return@withContext PerFileScanOutcome(
+                            uri = uri,
+                            result = ExtractionResult.SkippedKnown(
+                                existingTransactionId = existingTx.id,
+                                amountPaise = existingTx.amountPaise,
+                                merchant = existingTx.merchant,
+                                dateFormatted = MoneyUtils.formatShortDateTime(existingTx.timestamp, existingTx.hasExplicitTime),
+                                logEntry = log
+                            ),
+                            logEntry = log
+                        )
+                    }
+                }
+                if (sha256Hash.isNotBlank()) {
+                    val confirmedRecord = findConfirmedHash(sha256Hash)
+                    if (confirmedRecord != null) {
+                        val totalElapsed = (SystemClock.elapsedRealtime() - totalStart).coerceAtLeast(1L)
+                        val log = ScanLogEntry(
+                            readFileMs = readMs,
+                            ocrTextMs = ocrMs,
+                            regexMs = regexMs,
+                            totalMs = totalElapsed,
+                            path = ScanPath.SKIPPED_KNOWN
+                        )
+                        return@withContext PerFileScanOutcome(
+                            uri = uri,
+                            result = ExtractionResult.SkippedKnown(
+                                existingTransactionId = confirmedRecord.transactionId.takeIf { it > 0L },
+                                amountPaise = confirmedRecord.amountPaise,
+                                merchant = confirmedRecord.merchant,
+                                dateFormatted = confirmedRecord.dateFormatted,
+                                logEntry = log
+                            ),
+                            logEntry = log
+                        )
+                    }
+                }
+            }
+
+            // STEP 3: 0-API Fast Path (Section C.9)
+            if (regexResult.fastPathDraft != null) {
+                val verifiedFastDraft = LocalDraftVerifier.verifyAndEnrichDraft(
+                    draft = regexResult.fastPathDraft.copy(scanSha256Hash = sha256Hash.ifBlank { null }),
+                    onDeviceText = cleanedText,
+                    regexAnchors = regexResult.detectedAnchors,
+                    categories = categories,
+                    merchantMemories = merchantMemories,
+                    cardBillMode = cardBillMode
+                )
+                val totalElapsed = (SystemClock.elapsedRealtime() - totalStart).coerceAtLeast(1L)
+                val log = ScanLogEntry(
+                    readFileMs = readMs,
+                    ocrTextMs = ocrMs,
+                    regexMs = regexMs,
+                    totalMs = totalElapsed,
+                    path = ScanPath.FAST_PATH
+                )
+                return@withContext PerFileScanOutcome(
+                    uri = uri,
+                    result = ExtractionResult.Success(
+                        drafts = listOf(verifiedFastDraft),
+                        logEntry = log,
+                        skippedPdfPages = ocrResult.skippedPdfPages
+                    ),
+                    logEntry = log
+                )
+            }
+
+            // Check offline state before attempting Gemini network calls (Part 2.4)
+            if (!isDeviceOnline()) {
+                val totalElapsed = (SystemClock.elapsedRealtime() - totalStart).coerceAtLeast(1L)
+                val log = ScanLogEntry(
+                    readFileMs = readMs,
+                    ocrTextMs = ocrMs,
+                    regexMs = regexMs,
+                    totalMs = totalElapsed,
+                    path = ScanPath.TEXT_AI
+                )
+                return@withContext PerFileScanOutcome(
+                    uri = uri,
+                    result = ExtractionResult.RateLimited("Offline. Scan queued and will retry when online.", log),
+                    logEntry = log
+                )
+            }
+
+            // STEP 4: Text-Only Gemini 3.8-Flash Call (with chunking & StatementLineFilter for multi-row/PDF)
+            if (ocrResult.isValidText) {
+                val aiStart = SystemClock.elapsedRealtime()
+                val textOutcome = if (ocrResult.isPdf && ocrResult.pages.size > 1) {
+                    extractPdfPagesInChunks(
+                        pages = ocrResult.pages,
+                        categories = categories,
+                        source = source,
+                        onProgress = onProgress
+                    )
+                } else if (regexResult.isMultiRowLikely) {
+                    extractMultiRowStatementText(
+                        rawCleanedText = cleanedText,
+                        categories = categories,
+                        source = source,
+                        onProgress = onProgress
+                    )
+                } else {
+                    onProgress("Categorising transaction...")
+                    callGeminiTextChunk(
+                        textChunk = cleanedText,
+                        categories = categories,
+                        source = source,
+                        scanSha256Hash = sha256Hash.ifBlank { null }
+                    )
+                }
+                aiTextMs = (SystemClock.elapsedRealtime() - aiStart).coerceAtLeast(1L)
+                retries += textOutcome.retries
+                promptTok += textOutcome.promptTokens
+                outputTok += textOutcome.outputTokens
+                preFilterTok += textOutcome.preFilterTokens
+                postFilterTok += textOutcome.postFilterTokens
+
+                if (textOutcome.result is ExtractionResult.RateLimited) {
+                    val totalElapsed = (SystemClock.elapsedRealtime() - totalStart).coerceAtLeast(1L)
+                    val log = ScanLogEntry(
+                        readFileMs = readMs,
+                        ocrTextMs = ocrMs,
+                        regexMs = regexMs,
+                        geminiTextMs = aiTextMs,
+                        totalMs = totalElapsed,
+                        path = ScanPath.TEXT_AI,
+                        retries = retries,
+                        promptTokens = promptTok,
+                        outputTokens = outputTok,
+                        preFilterTokens = preFilterTok,
+                        postFilterTokens = postFilterTok
+                    )
+                    return@withContext PerFileScanOutcome(uri, textOutcome.result.copy(logEntry = log), log)
+                }
+
+                if (textOutcome.result is ExtractionResult.Success && textOutcome.result.drafts.isNotEmpty()) {
+                    val verifiedDrafts = textOutcome.result.drafts.map { draft ->
+                        LocalDraftVerifier.verifyAndEnrichDraft(
+                            draft = draft.copy(
+                                missingRowsWarning = textOutcome.missingRowsWarning ?: draft.missingRowsWarning,
+                                scanSha256Hash = if (textOutcome.result.drafts.size == 1) sha256Hash.ifBlank { null } else null
+                            ),
+                            onDeviceText = ocrResult.fullCleanedText,
+                            regexAnchors = if (textOutcome.result.drafts.size == 1) regexResult.detectedAnchors else null,
+                            categories = categories,
+                            merchantMemories = merchantMemories,
+                            cardBillMode = cardBillMode
+                        )
+                    }
+                    val totalElapsed = (SystemClock.elapsedRealtime() - totalStart).coerceAtLeast(1L)
+                    val log = ScanLogEntry(
+                        readFileMs = readMs,
+                        ocrTextMs = ocrMs,
+                        regexMs = regexMs,
+                        geminiTextMs = aiTextMs,
+                        totalMs = totalElapsed,
+                        path = ScanPath.TEXT_AI,
+                        retries = retries,
+                        promptTokens = promptTok,
+                        outputTokens = outputTok,
+                        preFilterTokens = preFilterTok,
+                        postFilterTokens = postFilterTok
+                    )
+                    return@withContext PerFileScanOutcome(
+                        uri = uri,
+                        result = ExtractionResult.Success(
+                            drafts = verifiedDrafts,
+                            logEntry = log,
+                            skippedPdfPages = ocrResult.skippedPdfPages
+                        ),
+                        logEntry = log
+                    )
+                }
+            }
+
+            // STEP 5: Compressed Multimodal Vision Fallback (runs on this specific failed file!)
+            onProgress("Enhancing & scanning photo...")
+            val visionTelemetry = visionFallback.analyzeWithVisionFallbackTelemetry(
+                sourceUri = if (!ocrResult.isPdf) uri else null,
+                sourceBitmap = ocrResult.fallbackBitmaps.firstOrNull(),
+                partialOcrHint = ocrResult.fullCleanedText,
+                categories = categories,
+                source = source,
+                onStatusUpdate = onProgress
+            )
+            visionMs = visionTelemetry.visionMs
+            retries += visionTelemetry.retries
+            promptTok += visionTelemetry.promptTokens
+            outputTok += visionTelemetry.outputTokens
+
+            val totalElapsed = (SystemClock.elapsedRealtime() - totalStart).coerceAtLeast(1L)
+            val log = ScanLogEntry(
+                readFileMs = readMs,
+                ocrTextMs = ocrMs,
+                regexMs = regexMs,
+                geminiTextMs = aiTextMs,
+                visionFallbackMs = visionMs,
+                totalMs = totalElapsed,
+                path = ScanPath.VISION_AI,
+                retries = retries,
+                promptTokens = promptTok,
+                outputTokens = outputTok,
+                preFilterTokens = preFilterTok,
+                postFilterTokens = postFilterTok
+            )
+
+            val finalVisionResult = when (val r = visionTelemetry.result) {
+                is ExtractionResult.Success -> {
+                    val verified = r.drafts.map { draft ->
+                        LocalDraftVerifier.verifyAndEnrichDraft(
+                            draft = draft.copy(scanSha256Hash = sha256Hash.ifBlank { null }),
+                            onDeviceText = ocrResult.fullCleanedText,
+                            regexAnchors = regexResult.detectedAnchors,
+                            categories = categories,
+                            merchantMemories = merchantMemories,
+                            cardBillMode = cardBillMode
+                        )
+                    }
+                    ExtractionResult.Success(verified, log, ocrResult.skippedPdfPages)
+                }
+                is ExtractionResult.RateLimited -> r.copy(logEntry = log)
+                is ExtractionResult.UnreadableOrNoPayments -> r.copy(logEntry = log)
+                is ExtractionResult.Error -> r.copy(logEntry = log)
+                else -> r
+            }
+
+            PerFileScanOutcome(uri = uri, result = finalVisionResult, logEntry = log)
+        } catch (e: CancellationException) {
+            throw e
+        } catch (e: Exception) {
+            Log.e(TAG, "Per-file pipeline failed for $uri", e)
+            val totalElapsed = (SystemClock.elapsedRealtime() - totalStart).coerceAtLeast(1L)
+            val log = ScanLogEntry(
+                readFileMs = readMs,
+                ocrTextMs = ocrMs,
+                regexMs = regexMs,
+                geminiTextMs = aiTextMs,
+                visionFallbackMs = visionMs,
+                totalMs = totalElapsed,
+                path = if (visionMs > 0L) ScanPath.VISION_AI else ScanPath.TEXT_AI,
+                retries = retries,
+                promptTokens = promptTok,
+                outputTokens = outputTok
+            )
+            PerFileScanOutcome(
+                uri = uri,
+                result = ExtractionResult.Error(
+                    e.localizedMessage ?: "Couldn't read this file. Tap Retry.",
+                    logEntry = log
+                ),
+                logEntry = log
+            )
+        }
+    }
+
+    private data class TextCallTelemetry(
+        val result: ExtractionResult,
+        val retries: Int = 0,
+        val promptTokens: Int = 0,
+        val outputTokens: Int = 0,
+        val preFilterTokens: Int = 0,
+        val postFilterTokens: Int = 0,
+        val missingRowsWarning: String? = null
+    )
+
+    private suspend fun extractPdfPagesInChunks(
+        pages: List<ExtractedPage>,
+        categories: List<CategoryEntity>,
+        source: TransactionSource,
+        onProgress: (String) -> Unit
+    ): TextCallTelemetry = coroutineScope {
+        val pageChunks = pages.chunked(PDF_PAGE_CHUNK_SIZE)
+        val semaphore = Semaphore(3)
+        val completedChunks = java.util.concurrent.atomic.AtomicInteger(0)
+
+        val outcomes = pageChunks.mapIndexed { chunkIdx, chunkPages ->
+            async(Dispatchers.IO) {
+                semaphore.withPermit {
+                    val rawChunkText = chunkPages.joinToString("\n\n") { it.cleanedText }.trim()
+                    val filtered = StatementLineFilter.filterStatementLines(rawChunkText)
+                    val outcome = callGeminiTextChunk(
+                        textChunk = filtered.filteredText,
+                        categories = categories,
+                        source = source
+                    )
+                    val done = completedChunks.incrementAndGet()
+                    val readPagesCount = (done * PDF_PAGE_CHUNK_SIZE).coerceAtMost(pages.size)
+                    onProgress("Read $readPagesCount of ${pages.size} pages...")
+                    outcome.copy(
+                        preFilterTokens = filtered.preFilterTokens,
+                        postFilterTokens = filtered.postFilterTokens,
+                        missingRowsWarning = if (
+                            outcome.result is ExtractionResult.Success &&
+                            filtered.keptTransactionRowCount >= 3 &&
+                            outcome.result.drafts.size < filtered.keptTransactionRowCount
+                        ) {
+                            "SOME ROWS MAY BE MISSING (${outcome.result.drafts.size} of ~${filtered.keptTransactionRowCount} read)"
+                        } else null
+                    )
+                }
+            }
+        }.awaitAll()
+
+        combineChunkOutcomes(outcomes)
+    }
+
+    private suspend fun extractMultiRowStatementText(
+        rawCleanedText: String,
+        categories: List<CategoryEntity>,
+        source: TransactionSource,
+        onProgress: (String) -> Unit
+    ): TextCallTelemetry = coroutineScope {
+        // Check if a deterministic BankStatementParser matches first (Part 3.7)
+        val parser = BankStatementParserRegistry.findMatchingParser(rawCleanedText)
+        if (parser != null) {
+            val parsedDrafts = parser.parse(rawCleanedText)
+            if (parsedDrafts.isNotEmpty()) {
+                return@coroutineScope TextCallTelemetry(
+                    result = ExtractionResult.Success(parsedDrafts)
+                )
+            }
+        }
+
+        val filtered = StatementLineFilter.filterStatementLines(rawCleanedText)
+        val lines = filtered.filteredText.lines().filter { it.isNotBlank() }
+        if (lines.size <= STATEMENT_ROW_CHUNK_SIZE) {
+            onProgress("Categorising statement rows...")
+            val single = callGeminiTextChunk(
+                textChunk = filtered.filteredText,
+                categories = categories,
+                source = source
+            )
+            val missingWarning = if (
+                single.result is ExtractionResult.Success &&
+                filtered.keptTransactionRowCount >= 3 &&
+                single.result.drafts.size < filtered.keptTransactionRowCount
+            ) {
+                "SOME ROWS MAY BE MISSING (${single.result.drafts.size} of ~${filtered.keptTransactionRowCount} read)"
+            } else null
+            return@coroutineScope single.copy(
+                preFilterTokens = filtered.preFilterTokens,
+                postFilterTokens = filtered.postFilterTokens,
+                missingRowsWarning = missingWarning
+            )
+        }
+
+        val lineChunks = lines.chunked(STATEMENT_ROW_CHUNK_SIZE)
+        val semaphore = Semaphore(3)
+        val outcomes = lineChunks.mapIndexed { idx, chunkLines ->
+            async(Dispatchers.IO) {
+                semaphore.withPermit {
+                    onProgress("Categorising statement batch ${idx + 1} of ${lineChunks.size}...")
+                    callGeminiTextChunk(
+                        textChunk = chunkLines.joinToString("\n"),
+                        categories = categories,
+                        source = source
+                    )
+                }
+            }
+        }.awaitAll()
+
+        val combined = combineChunkOutcomes(outcomes)
+        val missingWarning = if (
+            combined.result is ExtractionResult.Success &&
+            filtered.keptTransactionRowCount >= 3 &&
+            combined.result.drafts.size < filtered.keptTransactionRowCount
+        ) {
+            "SOME ROWS MAY BE MISSING (${combined.result.drafts.size} of ~${filtered.keptTransactionRowCount} read)"
+        } else null
+
+        combined.copy(
+            preFilterTokens = filtered.preFilterTokens,
+            postFilterTokens = filtered.postFilterTokens,
+            missingRowsWarning = missingWarning
+        )
+    }
+
+    private fun combineChunkOutcomes(outcomes: List<TextCallTelemetry>): TextCallTelemetry {
+        val allDrafts = mutableListOf<DraftTransaction>()
+        var totalRetries = 0
+        var totalPromptTok = 0
+        var totalOutputTok = 0
+        var totalPreTok = 0
+        var totalPostTok = 0
+        var firstWarning: String? = null
+        var sawRateLimit: ExtractionResult.RateLimited? = null
+        var firstError: ExtractionResult? = null
+
+        for (o in outcomes) {
+            totalRetries += o.retries
+            totalPromptTok += o.promptTokens
+            totalOutputTok += o.outputTokens
+            totalPreTok += o.preFilterTokens
+            totalPostTok += o.postFilterTokens
+            if (firstWarning == null && o.missingRowsWarning != null) {
+                firstWarning = o.missingRowsWarning
+            }
+            when (val r = o.result) {
+                is ExtractionResult.Success -> allDrafts.addAll(r.drafts)
+                is ExtractionResult.RateLimited -> if (sawRateLimit == null) sawRateLimit = r
+                else -> if (firstError == null) firstError = r
+            }
+        }
+
+        val finalResult = when {
+            allDrafts.isNotEmpty() -> ExtractionResult.Success(allDrafts)
+            sawRateLimit != null -> sawRateLimit
+            firstError != null -> firstError
+            else -> ExtractionResult.UnreadableOrNoPayments("No transactions found in statement.")
+        }
+
+        return TextCallTelemetry(
+            result = finalResult,
+            retries = totalRetries,
+            promptTokens = totalPromptTok,
+            outputTokens = totalOutputTok,
+            preFilterTokens = totalPreTok,
+            postFilterTokens = totalPostTok,
+            missingRowsWarning = firstWarning
+        )
+    }
+
+    /**
+     * Backward-compatible multi-URI entry point used by background worker or callers that want a single aggregated result.
+     * Processes each URI independently with up to 3 concurrent files (Part 2.1).
      */
     suspend fun extractFromUris(
         uris: List<Uri>,
         categories: List<CategoryEntity>,
         merchantMemories: List<MerchantMemoryEntity> = emptyList(),
         onProgress: (currentStep: Int, totalSteps: Int, statusText: String) -> Unit
-    ): ExtractionResult = withContext(Dispatchers.IO) {
+    ): ExtractionResult = coroutineScope {
         if (uris.isEmpty()) {
-            return@withContext ExtractionResult.Error("No file selected.")
+            return@coroutineScope ExtractionResult.Error("No file selected.")
         }
 
-        try {
-            // STEP 1: On-Device ML Kit Text Extraction (<200ms, 0 tokens)
-            onProgress(1, 3, "Extracting text on device...")
-            val ocrResult = localExtractor.extractFromUris(uris) { current, total ->
-                onProgress(current, maxOf(total, 3), "Extracting text on device ($current/$total)...")
-            }
-
-            // STEP 2: Local Regex Noise Stripping & 0-API Fast Path (<50ms, 0 tokens)
-            onProgress(2, 3, "Filtering receipt text...")
-            val primarySource = if (uris.any { it.toString().endsWith(".pdf", ignoreCase = true) }) {
-                TransactionSource.PDF
-            } else {
-                TransactionSource.SCREENSHOT
-            }
-
-            val regexResult = UpiRegexPreProcessor.process(
-                rawOcrText = ocrResult.fullCleanedText,
-                categories = categories,
-                merchantMemories = merchantMemories,
-                source = primarySource
-            )
-
-            // 0-API Fast Path: If high-confidence anchor matches known category, construct draft locally without Gemini!
-            if (regexResult.fastPathDraft != null) {
-                Log.d(TAG, "0-API Fast Path matched! Merchant: ${regexResult.fastPathDraft.merchant}")
-                return@withContext ExtractionResult.Success(listOf(regexResult.fastPathDraft))
-            }
-
-            // STEP 3: Ultra-Fast Text-Only Gemini 3.8-Flash Call (Primary Cloud Path)
-            if (ocrResult.isValidText) {
-                val txCountLabel = if (regexResult.isMultiRowLikely) "statement" else "1"
-                onProgress(2, 3, "Categorising $txCountLabel transaction(s)...")
-
-                val textResult = extractFromCleanedOcrText(
-                    cleanedOcrText = regexResult.cleanedText,
-                    categories = categories,
-                    detectedAnchors = regexResult.detectedAnchors,
-                    source = primarySource
-                )
-
-                if (textResult is ExtractionResult.Success && textResult.drafts.isNotEmpty()) {
-                    return@withContext textResult
+        val semaphore = Semaphore(3)
+        val completed = java.util.concurrent.atomic.AtomicInteger(0)
+        val outcomes = uris.mapIndexed { idx, uri ->
+            async(Dispatchers.IO) {
+                semaphore.withPermit {
+                    onProgress(idx + 1, uris.size, "Scanning file ${idx + 1} of ${uris.size}...")
+                    val outcome = extractSingleUriWithPipeline(
+                        uri = uri,
+                        categories = categories,
+                        merchantMemories = merchantMemories,
+                        onProgress = { msg ->
+                            onProgress(completed.get() + 1, uris.size, msg)
+                        }
+                    )
+                    completed.incrementAndGet()
+                    outcome
                 }
             }
+        }.awaitAll()
 
-            // STEP 4: Compressed Multimodal Vision Fallback (Safety Net for blurry, handwritten, or low-light receipts)
-            onProgress(2, 3, "Enhancing & scanning photo...")
-            val fallbackResult = visionFallback.analyzeWithVisionFallback(
-                sourceUri = uris.firstOrNull(),
-                sourceBitmap = ocrResult.fallbackBitmaps.firstOrNull(),
-                partialOcrHint = ocrResult.fullCleanedText,
-                categories = categories,
-                source = primarySource,
-                onStatusUpdate = { msg -> onProgress(2, 3, msg) }
-            )
-
-            fallbackResult
-        } catch (e: TimeoutCancellationException) {
-            Log.e(TAG, "Gemini extraction timed out", e)
-            ExtractionResult.Error("AI reading timed out after retrying. Check your internet or queue this scan for later.")
-        } catch (e: CancellationException) {
-            throw e
-        } catch (e: Exception) {
-            Log.e(TAG, "Gemini extraction failed", e)
-            ExtractionResult.Error(
-                e.localizedMessage ?: "Couldn't reach Gemini AI. Your picked file is kept safe — tap Try Again or Queue Scan."
-            )
+        val allDrafts = outcomes.flatMap { (it.result as? ExtractionResult.Success)?.drafts.orEmpty() }
+        if (allDrafts.isNotEmpty()) {
+            ExtractionResult.Success(allDrafts, outcomes.firstOrNull()?.logEntry)
+        } else {
+            outcomes.firstOrNull()?.result ?: ExtractionResult.Error("Scan failed.")
         }
     }
 
     /**
-     * Ultra-fast text-only Gemini 3.8-Flash request (no image/PDF bytes).
-     * Configured for sub-second latency with temperature = 0.1f and thinkingBudget = 0.
-     * Supports single receipts and multi-row statements.
+     * Ultra-fast text-only Gemini 3.8-Flash request (`thinkingBudget = 0`, `temperature = 0.1f`,
+     * 20s timeout, max 2 attempts, compact short-key schema, fixed instructions first, normalized text last).
      */
     suspend fun extractFromCleanedOcrText(
         cleanedOcrText: String,
         categories: List<CategoryEntity>,
         detectedAnchors: DetectedUpiAnchors? = null,
         source: TransactionSource = TransactionSource.SCREENSHOT
-    ): ExtractionResult = withContext(Dispatchers.IO) {
+    ): ExtractionResult {
+        return callGeminiTextChunk(
+            textChunk = cleanedOcrText,
+            categories = categories,
+            source = source
+        ).result
+    }
+
+    private suspend fun callGeminiTextChunk(
+        textChunk: String,
+        categories: List<CategoryEntity>,
+        source: TransactionSource,
+        scanSha256Hash: String? = null
+    ): TextCallTelemetry = withContext(Dispatchers.IO) {
         val allowedCategories = categories.map { it.name }.ifEmpty {
             DefaultCategories.ALL_DEFAULTS.map { it.name }
         }.distinct()
 
-        val schema = buildExtractionSchema(allowedCategories)
+        val (categoryIdMap, categoryLegend) = GeminiCompactSchema.buildCategoryIdLegend(allowedCategories)
+        val schema = GeminiCompactSchema.buildCompactSchema(categoryIdMap.keys.toList())
         val config = generationConfig {
             temperature = 0.1f
             responseMimeType = "application/json"
@@ -308,62 +996,108 @@ class GeminiReceiptExtractor(private val context: Context) {
         }
 
         val model = Firebase.ai.generativeModel(
-            modelName = "gemini-3.8-flash",
+            modelName = GEMINI_MODEL_NAME,
             generationConfig = config
         )
 
-        val todayIso = SimpleDateFormat("yyyy-MM-dd", Locale.US).format(Date())
+        val dateNormalizedText = MoneyUtils.normalizeNumericDatesInTextForAi(textChunk)
+
+        // Fixed instructions first, variable text last (Part 3.2). No PRE-DETECTED REGEX HINTS block.
         val prompt = buildString {
-            appendLine("You are SnapSpend's ultra-fast text-only Indian payment, UPI receipt & bank statement parser.")
-            appendLine("Parse the following OCR text from an Indian UPI receipt, bill, or bank statement into structured JSON transaction(s).")
-            appendLine("Extract merchant/payee, amount in paise (Long), date/timestamp, paymentMode (ONLINE/CASH), type (EXPENSE/INCOME), and best-fit category.")
-            if (detectedAnchors != null) {
-                appendLine("PRE-DETECTED REGEX HINTS:")
-                detectedAnchors.amountPaise?.let { appendLine("- Amount in paise: $it") }
-                detectedAnchors.merchant?.let { appendLine("- Merchant candidate: $it") }
-                detectedAnchors.utrOrRef?.let { appendLine("- UTR / Ref: $it") }
-                appendLine("- App: ${detectedAnchors.paymentApp}")
-                appendLine("- Direction hint: ${detectedAnchors.type}")
-            }
-            appendLine()
-            appendLine("CLEANED OCR TEXT:")
-            appendLine(cleanedOcrText)
-            appendLine()
+            appendLine("You are SnapSpend's Indian UPI receipt, bill & bank statement parser.")
+            appendLine("Extract every payment transaction into `items` using the compact JSON schema.")
+            appendLine("CATEGORY ID LEGEND ($categoryLegend) -> return the short ID (e.g. c1) in `c`.")
             appendLine("STRICT RULES:")
-            appendLine("1. Allowed Categories ONLY: ${allowedCategories.joinToString(", ")}. Choose the single best fit. Never invent a new category.")
-            appendLine("2. Multi-Row Statements: If multiple payments/rows are visible in the text, extract ALL rows into a single JSON array (`payments`) in one pass.")
-            appendLine("3. Amounts: All amounts MUST be converted to whole Indian paise in `amountPaise` (e.g. ₹145.50 -> 14550L, ₹20 -> 2000L).")
-            appendLine("4. Clean cryptic bank/UPI narration (e.g. 'UPI/412983/SWIGGY INSTAMART/BLR') into clean merchant name ('Swiggy Instamart').")
-            appendLine("5. Direction: Money out = EXPENSE, refunds/money received = EARNING, ATM cash withdrawal = TRANSFER with paymentMode = CASH.")
-            appendLine("6. Date: YYYY-MM-DD ($todayIso if unknown); Time: HH:mm in 24h format.")
+            appendLine("1. `a` = exact amount in whole Indian paise (e.g. ₹145.50 -> 14550, ₹20 -> 2000).")
+            appendLine("2. `m` = clean human-readable merchant or person name (e.g. clean 'UPI/412983/SWIGGY INSTAMART/BLR' -> 'Swiggy Instamart'). If paid to a person's name, choose the 'Sent to People' category ID.")
+            appendLine("3. `t` = EXPENSE for money out, EARNING for money received/refunds/cashback, TRANSFER for money moved between the user's own accounts or ATM cash withdrawals (ATM, CASH WDL, ATW).")
+            appendLine("4. `p` = 'CASH' for physical cash or ATM cash withdrawals; otherwise the payment app/method ('GPay', 'PhonePe', 'Paytm', 'CRED', 'Card', 'UPI', 'Bank').")
+            appendLine("5. `d` = YYYY-MM-DD, or 'unknown' if no date is visible in the text (never guess today's date when missing). `tm` = HH:mm in 24h format, or 'unknown'.")
+            appendLine("6. `r` = 12-digit UPI UTR / reference number if visible, else 'unknown'.")
+            appendLine("7. Multi-row statements: extract ALL payment rows in the text into `items`.")
+            appendLine()
+            appendLine("TEXT:")
+            appendLine(dateNormalizedText)
         }
 
-        try {
-            val rawJson = retryWithExponentialBackoff(maxAttempts = 3, initialDelayMs = 900L) {
-                val response = withTimeout(45_000L) {
+        var retriesUsed = 0
+        var promptTok = 0
+        var outputTok = 0
+        var currentDelay = 900L
+
+        for (attempt in 1..TEXT_MAX_ATTEMPTS) {
+            try {
+                if (attempt > 1) retriesUsed = attempt - 1
+                val response = withTimeout(TEXT_TIMEOUT_MS) {
                     model.generateContent(prompt)
                 }
-                val text = response.text
-                if (text.isNullOrBlank()) {
+                promptTok += response.usageMetadata?.promptTokenCount ?: 0
+                outputTok += response.usageMetadata?.candidatesTokenCount ?: 0
+                val rawJson = response.text
+                if (rawJson.isNullOrBlank()) {
                     throw IllegalStateException("Empty text response from Gemini.")
                 }
-                text
+                val parsed = GeminiCompactSchema.parseCompactOrLegacyJson(
+                    jsonString = rawJson,
+                    source = source,
+                    allowedCategories = allowedCategories,
+                    categoryIdMap = categoryIdMap,
+                    scanSha256Hash = scanSha256Hash
+                )
+                return@withContext TextCallTelemetry(
+                    result = parsed,
+                    retries = retriesUsed,
+                    promptTokens = promptTok,
+                    outputTokens = outputTok
+                )
+            } catch (e: CancellationException) {
+                if (e !is TimeoutCancellationException) throw e
+                if (attempt >= TEXT_MAX_ATTEMPTS) {
+                    return@withContext TextCallTelemetry(
+                        result = ExtractionResult.Error("AI reading timed out after 20s. Check your internet or Queue Scan."),
+                        retries = retriesUsed,
+                        promptTokens = promptTok,
+                        outputTokens = outputTok
+                    )
+                }
+                delay(currentDelay)
+                currentDelay *= 2L
+            } catch (e: Exception) {
+                val kind = GeminiCompactSchema.classifyAiError(e)
+                if (kind == AiErrorKind.RATE_LIMITED_429) {
+                    return@withContext TextCallTelemetry(
+                        result = ExtractionResult.RateLimited("AI limit reached. Queued, will retry later"),
+                        retries = retriesUsed,
+                        promptTokens = promptTok,
+                        outputTokens = outputTok
+                    )
+                }
+                if (kind == AiErrorKind.FATAL_CLIENT_ERROR || attempt >= TEXT_MAX_ATTEMPTS) {
+                    Log.e(TAG, "callGeminiTextChunk failed", e)
+                    return@withContext TextCallTelemetry(
+                        result = ExtractionResult.Error(GeminiCompactSchema.formatFatalErrorMessage(e)),
+                        retries = retriesUsed,
+                        promptTokens = promptTok,
+                        outputTokens = outputTok
+                    )
+                }
+                delay(currentDelay)
+                currentDelay *= 2L
             }
-            parseExtractionJson(rawJson, source, allowedCategories)
-        } catch (e: Exception) {
-            Log.e(TAG, "extractFromCleanedOcrText failed", e)
-            ExtractionResult.Error(e.localizedMessage ?: "Text-only extraction failed.")
         }
+
+        TextCallTelemetry(
+            result = ExtractionResult.Error("Text extraction failed."),
+            retries = retriesUsed,
+            promptTokens = promptTok,
+            outputTokens = outputTok
+        )
     }
 
     /**
-     * Converts a single user-typed, voice-dictated, or pasted payment note (e.g.
-     * "Paid 480 at Blue Tokai via GPay split 2 ways" or a pasted bank SMS) into structured
-     * DraftTransactions using `gemini-4-argon` with `Schema.obj` + automatic exponential backoff retry
-     * and local deterministic fallback if offline.
-     *
-     * PRIVACY GUARANTEE: Only the single `userInput` string entered by Yu is sent to Gemini.
-     * Stored Room transactions are NEVER sent to any AI model.
+     * Converts a single user-typed, voice-dictated, or pasted payment note into structured
+     * DraftTransactions using [GEMINI_MODEL_NAME] (`gemini-3.8-flash`) with the compact short-key schema
+     * and records a `NOTE_AI` scan log entry.
      */
     suspend fun extractFromNaturalLanguageText(
         userInput: String,
@@ -371,6 +1105,7 @@ class GeminiReceiptExtractor(private val context: Context) {
         defaultPaymentMode: String = "ONLINE",
         defaultCashType: TransactionType? = null
     ): ExtractionResult = withContext(Dispatchers.IO) {
+        val t0 = SystemClock.elapsedRealtime()
         val trimmedInput = userInput.trim()
         if (trimmedInput.isEmpty()) {
             return@withContext ExtractionResult.Error("Please type or speak a payment description first.")
@@ -378,8 +1113,10 @@ class GeminiReceiptExtractor(private val context: Context) {
 
         val allowedCategories = categories.map { it.name }.ifEmpty {
             DefaultCategories.ALL_DEFAULTS.map { it.name }
-        }
-        val schema = buildExtractionSchema(allowedCategories)
+        }.distinct()
+
+        val (categoryIdMap, categoryLegend) = GeminiCompactSchema.buildCategoryIdLegend(allowedCategories)
+        val schema = GeminiCompactSchema.buildCompactSchema(categoryIdMap.keys.toList())
         val config = generationConfig {
             temperature = 0.1f
             responseMimeType = "application/json"
@@ -390,7 +1127,7 @@ class GeminiReceiptExtractor(private val context: Context) {
         }
 
         val model = Firebase.ai.generativeModel(
-            modelName = "gemini-3.8-flash",
+            modelName = GEMINI_MODEL_NAME,
             generationConfig = config
         )
 
@@ -400,48 +1137,87 @@ class GeminiReceiptExtractor(private val context: Context) {
         val normalizedDefaultMode = if (defaultPaymentMode.equals("CASH", ignoreCase = true)) "CASH" else "ONLINE"
         val defaultTypeHint = defaultCashType?.name ?: "EXPENSE"
 
-        val prompt = """
-            You are SnapSpend's precision Indian payment & receipt parser.
-            Parse the user's payment note, rough cash log, voice transcription, or pasted bank alert into structured payment transaction(s).
-            
-            USER INPUT:
-            "$trimmedInput"
-            
-            STRICT RULES:
-            1. Allowed Categories ONLY: ${allowedCategories.joinToString(", ")}. Never invent a new category.
-            2. MULTI-ITEM SPLITTING: If the user mentions multiple separate payments in one note (e.g. "40 momos, 60 auto" or "auto 60, samosa 30"), return EACH payment as a separate entry in the `payments` array with its own merchant, category, and `amountPaise`.
-            3. Clean messy UPI/bank strings (like 'UPI/412983/SWIGGY INSTAMART/BLR') into a clean human-friendly `merchant` name ('Swiggy Instamart') and put the raw string in `rawMerchantText`. For rough cash notes like "40 momos near station", set `merchant` to a clean title-cased name like "Momos Near Station" and choose the best matching `suggestedCategory` (e.g. "Food & Dining").
-            4. Convert rupee amounts into exact whole paise in `amountPaise` (e.g. ₹150.50 -> 15050, ₹40 -> 4000) and also set `amountText`.
-            5. Default `paymentMode` is "$normalizedDefaultMode" and default `type` is "$defaultTypeHint" unless the note clearly indicates otherwise (e.g. "got 500 cash from friend" -> type = "EARNING", or ATM cash withdrawal "ATM WDL" / "CASH WITHDRAWAL" / "ATW" -> type = "TRANSFER" and paymentMode = "CASH"). If `paymentMode` is "CASH", set `paymentApp` to "Cash".
-            6. If the user mentions splitting a bill equally (e.g. "split 2 ways", "divided by 3"), set `amountPaise` to the FULL bill amount and set `suggestedSplitWays` to that number (e.g. 2 or 3).
-            7. If no date or time is mentioned in the note, use today's date ($todayIso) and current time ($nowTime24h).
-        """.trimIndent()
+        val prompt = buildString {
+            appendLine("You are SnapSpend's precision Indian payment note & SMS parser.")
+            appendLine("Parse the user's payment note, rough cash log, or pasted bank alert into `items`.")
+            appendLine("CATEGORY ID LEGEND ($categoryLegend) -> return the short ID (e.g. c1) in `c`.")
+            appendLine("STRICT RULES:")
+            appendLine("1. MULTI-ITEM SPLITTING: If the user mentions multiple separate payments (e.g. '40 momos, 60 auto'), return EACH as a separate entry in `items`.")
+            appendLine("2. `a` = exact rupee amount in whole paise (₹150.50 -> 15050, ₹40 -> 4000).")
+            appendLine("3. `m` = clean title-cased merchant or item name. Map person names to 'Sent to People'.")
+            appendLine("4. Default `p` is '$normalizedDefaultMode' and default `t` is '$defaultTypeHint' unless the note indicates otherwise (e.g. 'got 500 cash' -> EARNING; 'ATM WDL' / 'ATW' -> TRANSFER with `p`='CASH').")
+            appendLine("5. If splitting equally among N people (e.g. 'split 2 ways'), set `a` to the full bill and `sp` = N.")
+            appendLine("6. If no date or time is mentioned in the note, use today's date ($todayIso) and time ($nowTime24h).")
+            appendLine()
+            appendLine("USER INPUT:")
+            appendLine(MoneyUtils.normalizeNumericDatesInTextForAi(trimmedInput))
+        }
+
+        var retriesUsed = 0
+        var promptTok = 0
+        var outputTok = 0
+        var currentDelay = 900L
 
         try {
-            val rawJson = retryWithExponentialBackoff(maxAttempts = 3, initialDelayMs = 900L) {
-                val response = withTimeout(60_000L) {
-                    model.generateContent(prompt)
+            var rawJson = ""
+            for (attempt in 1..TEXT_MAX_ATTEMPTS) {
+                try {
+                    if (attempt > 1) retriesUsed = attempt - 1
+                    val response = withTimeout(TEXT_TIMEOUT_MS) {
+                        model.generateContent(prompt)
+                    }
+                    promptTok += response.usageMetadata?.promptTokenCount ?: 0
+                    outputTok += response.usageMetadata?.candidatesTokenCount ?: 0
+                    val text = response.text
+                    if (text.isNullOrBlank()) throw IllegalStateException("Empty response from Gemini.")
+                    rawJson = text
+                    break
+                } catch (e: CancellationException) {
+                    if (e !is TimeoutCancellationException) throw e
+                    if (attempt >= TEXT_MAX_ATTEMPTS) throw e
+                    delay(currentDelay)
+                    currentDelay *= 2L
+                } catch (e: Exception) {
+                    val kind = GeminiCompactSchema.classifyAiError(e)
+                    if (kind == AiErrorKind.FATAL_CLIENT_ERROR || kind == AiErrorKind.RATE_LIMITED_429 || attempt >= TEXT_MAX_ATTEMPTS) {
+                        throw e
+                    }
+                    delay(currentDelay)
+                    currentDelay *= 2L
                 }
-                val text = response.text
-                if (text.isNullOrBlank()) {
-                    throw IllegalStateException("Empty response from Gemini.")
-                }
-                text
             }
-            parseExtractionJson(
+
+            val elapsed = (SystemClock.elapsedRealtime() - t0).coerceAtLeast(1L)
+            val logEntry = ScanLogEntry(
+                geminiTextMs = elapsed,
+                totalMs = elapsed,
+                path = ScanPath.NOTE_AI,
+                retries = retriesUsed,
+                promptTokens = promptTok,
+                outputTokens = outputTok
+            )
+
+            val parsed = GeminiCompactSchema.parseCompactOrLegacyJson(
                 jsonString = rawJson,
                 source = TransactionSource.MANUAL,
                 allowedCategories = allowedCategories,
+                categoryIdMap = categoryIdMap,
                 defaultPaymentMode = normalizedDefaultMode,
-                defaultCashType = defaultCashType
+                defaultCashType = defaultCashType,
+                missingDateDefaultsToToday = true
             )
+            if (parsed is ExtractionResult.Success) {
+                parsed.copy(logEntry = logEntry)
+            } else {
+                parsed
+            }
         } catch (e: CancellationException) {
             if (e !is TimeoutCancellationException) throw e
             Log.w(TAG, "Natural-language AI timed out; using local fallback parser", e)
             parseNaturalLanguageNoteLocally(trimmedInput, allowedCategories, normalizedDefaultMode, defaultCashType)
                 ?: ExtractionResult.Error("AI parsing timed out. Tap Try Again or Queue for later.")
         } catch (e: Exception) {
-            Log.w(TAG, "Natural-language AI failed after retries; attempting local fallback parser", e)
+            Log.w(TAG, "Natural-language AI failed; attempting local fallback parser", e)
             parseNaturalLanguageNoteLocally(trimmedInput, allowedCategories, normalizedDefaultMode, defaultCashType)
                 ?: ExtractionResult.Error(e.localizedMessage ?: "Couldn't reach Gemini AI. Tap Try Again or Queue for later.")
         }
@@ -479,7 +1255,7 @@ class GeminiReceiptExtractor(private val context: Context) {
             val splitWays = splitRegex.find(seg)?.groupValues?.getOrNull(1)?.toIntOrNull()?.coerceIn(1, 20) ?: 1
 
             val lower = seg.lowercase(Locale.US)
-            val isAtm = com.example.data.rules.LocalInsightsAndRulesEngine.isAtmCashWithdrawalText(seg)
+            val isAtm = LocalDraftVerifier.isAtmWithdrawalContext(seg)
 
             val (cleanedMerchant, rawMerchant) = MoneyUtils.cleanRawUpiOrBankMerchant(seg)
             val atMerchantRegex = Regex("""(?:at|to|from)\s+([A-Za-z0-9 &'.\-]{2,28}?)(?:\s+(?:via|on|for|split|rs|₹)|\s*$)""", RegexOption.IGNORE_CASE)
@@ -522,12 +1298,14 @@ class GeminiReceiptExtractor(private val context: Context) {
                 else -> TransactionType.EXPENSE
             }
 
+            val brandCat = IndianBrandDictionary.matchCategory(merchantCandidate, seg)
             val defaultCat = when {
                 resolvedType == TransactionType.TRANSFER -> "Transfers"
                 resolvedType == TransactionType.EARNING -> allowedCategories.firstOrNull { it.contains("Income", ignoreCase = true) || it.contains("Gift", ignoreCase = true) } ?: "Other Income"
+                brandCat != null -> brandCat
                 lower.contains("auto") || lower.contains("cab") || lower.contains("bus") || lower.contains("metro") || lower.contains("rickshaw") || lower.contains("petrol") ->
                     allowedCategories.firstOrNull { it.contains("Transport", ignoreCase = true) } ?: "Transport & Fuel"
-                lower.contains("momo") || lower.contains("samosa") || lower.contains("chai") || lower.contains("coffee") || lower.contains("dinner") || lower.contains("lunch") || lower.contains("swiggy") || lower.contains("zomato") ->
+                lower.contains("momo") || lower.contains("samosa") || lower.contains("chai") || lower.contains("coffee") || lower.contains("dinner") || lower.contains("lunch") ->
                     allowedCategories.firstOrNull { it.contains("Food", ignoreCase = true) } ?: "Food & Dining"
                 lower.contains("milk") || lower.contains("bread") || lower.contains("veggie") || lower.contains("grocery") ->
                     allowedCategories.firstOrNull { it.contains("Grocer", ignoreCase = true) } ?: "Groceries"
@@ -549,7 +1327,8 @@ class GeminiReceiptExtractor(private val context: Context) {
                 note = seg,
                 source = TransactionSource.MANUAL,
                 confidence = 0.82f,
-                paymentMode = resolvedMode
+                paymentMode = resolvedMode,
+                isAtmWithdrawal = isAtm
             )
 
             val finalDraft = if (splitWays > 1) baseDraft.applyEqualSplit(splitWays) else baseDraft
@@ -559,12 +1338,12 @@ class GeminiReceiptExtractor(private val context: Context) {
         return if (parsedDrafts.isNotEmpty()) ExtractionResult.Success(parsedDrafts) else null
     }
 
-
     suspend fun analyzeBitmapWithGemini(
         bitmap: Bitmap,
         allowedCategories: List<String>,
         source: TransactionSource
     ): ExtractionResult = withContext(Dispatchers.IO) {
+        val totalStart = SystemClock.elapsedRealtime()
         val categoryEntities = allowedCategories.map {
             CategoryEntity(
                 name = it,
@@ -575,249 +1354,112 @@ class GeminiReceiptExtractor(private val context: Context) {
             )
         }
 
-        // 1. Run on-device ML Kit OCR (<200ms)
+        var ocrMs = 0L
+        var regexMs = 0L
+        var orderedText = ""
         try {
+            val tOcr = SystemClock.elapsedRealtime()
             val inputImage = com.google.mlkit.vision.common.InputImage.fromBitmap(bitmap, 0)
             val visionText = com.google.mlkit.vision.text.TextRecognition
                 .getClient(com.google.mlkit.vision.text.latin.TextRecognizerOptions.DEFAULT_OPTIONS)
                 .process(inputImage)
                 .await()
-            val orderedText = localExtractor.stripStatusBarNoise(visionText.text)
+            orderedText = localExtractor.stripStatusBarNoise(visionText.text)
+            ocrMs = (SystemClock.elapsedRealtime() - tOcr).coerceAtLeast(1L)
 
             if (orderedText.length >= 15 && orderedText.any { it.isDigit() }) {
+                val tRegex = SystemClock.elapsedRealtime()
                 val regexResult = UpiRegexPreProcessor.process(
                     rawOcrText = orderedText,
                     categories = categoryEntities,
-                    merchantMemories = emptyList<MerchantMemoryEntity>(),
+                    merchantMemories = emptyList(),
                     source = source
                 )
+                regexMs = (SystemClock.elapsedRealtime() - tRegex).coerceAtLeast(1L)
 
                 if (regexResult.fastPathDraft != null) {
-                    return@withContext ExtractionResult.Success(listOf(regexResult.fastPathDraft))
+                    val verified = LocalDraftVerifier.verifyAndEnrichDraft(
+                        draft = regexResult.fastPathDraft,
+                        onDeviceText = regexResult.cleanedText,
+                        regexAnchors = regexResult.detectedAnchors,
+                        categories = categoryEntities,
+                        merchantMemories = emptyList()
+                    )
+                    val totalElapsed = (SystemClock.elapsedRealtime() - totalStart).coerceAtLeast(1L)
+                    val log = ScanLogEntry(
+                        ocrTextMs = ocrMs,
+                        regexMs = regexMs,
+                        totalMs = totalElapsed,
+                        path = ScanPath.FAST_PATH
+                    )
+                    return@withContext ExtractionResult.Success(listOf(verified), log)
                 }
 
-                val textResult = extractFromCleanedOcrText(
-                    cleanedOcrText = regexResult.cleanedText,
+                val tAi = SystemClock.elapsedRealtime()
+                val textTelemetry = callGeminiTextChunk(
+                    textChunk = regexResult.cleanedText,
                     categories = categoryEntities,
-                    detectedAnchors = regexResult.detectedAnchors,
                     source = source
                 )
+                val aiMs = (SystemClock.elapsedRealtime() - tAi).coerceAtLeast(1L)
 
-                if (textResult is ExtractionResult.Success && textResult.drafts.isNotEmpty()) {
-                    return@withContext textResult
+                if (textTelemetry.result is ExtractionResult.Success && textTelemetry.result.drafts.isNotEmpty()) {
+                    val verified = textTelemetry.result.drafts.map { draft ->
+                        LocalDraftVerifier.verifyAndEnrichDraft(
+                            draft = draft,
+                            onDeviceText = regexResult.cleanedText,
+                            regexAnchors = regexResult.detectedAnchors,
+                            categories = categoryEntities,
+                            merchantMemories = emptyList()
+                        )
+                    }
+                    val totalElapsed = (SystemClock.elapsedRealtime() - totalStart).coerceAtLeast(1L)
+                    val log = ScanLogEntry(
+                        ocrTextMs = ocrMs,
+                        regexMs = regexMs,
+                        geminiTextMs = aiMs,
+                        totalMs = totalElapsed,
+                        path = ScanPath.TEXT_AI,
+                        retries = textTelemetry.retries,
+                        promptTokens = textTelemetry.promptTokens,
+                        outputTokens = textTelemetry.outputTokens
+                    )
+                    return@withContext ExtractionResult.Success(verified, log)
                 }
             }
         } catch (e: Exception) {
             Log.w(TAG, "Local OCR on bitmap failed, falling back to compressed vision", e)
         }
 
-        // Fallback to compressed vision safety net
-        visionFallback.analyzeWithVisionFallback(
+        val visionTelemetry = visionFallback.analyzeWithVisionFallbackTelemetry(
             sourceBitmap = bitmap,
             sourceUri = null,
-            partialOcrHint = "",
+            partialOcrHint = orderedText,
             categories = categoryEntities,
             source = source
         )
-    }
-
-    private fun parseExtractionJson(
-        jsonString: String,
-        source: TransactionSource,
-        allowedCategories: List<String>,
-        defaultPaymentMode: String = "ONLINE",
-        defaultCashType: TransactionType? = null
-    ): ExtractionResult {
-        val root = JSONObject(jsonString)
-        val isReadable = root.optBoolean("isReadablePaymentDocument", true)
-        val unreadableReason = root.optString("unreadableReason", "")
-        val paymentsArray = root.optJSONArray("payments")
-
-        if (!isReadable || paymentsArray == null || paymentsArray.length() == 0) {
-            val msg = unreadableReason.ifBlank {
-                "Couldn't read a payment from this input. Make sure it clearly shows a payment or receipt."
-            }
-            return ExtractionResult.UnreadableOrNoPayments(msg)
-        }
-
-        val drafts = mutableListOf<DraftTransaction>()
-        for (i in 0 until paymentsArray.length()) {
-            val item = paymentsArray.getJSONObject(i)
-            val dateIso = item.optString("dateIso", "unknown")
-            val time24h = item.optString("time24h", "unknown")
-            val (timestampMillis, hasExplicitTime) = MoneyUtils.parseDateAndTime(dateIso, time24h)
-
-            val amountText = item.optString("amountText", "")
-            val amountFromText = MoneyUtils.parseRupeesToPaise(amountText)
-            val amountFromLong = item.optLong("amountPaise", 0L)
-            val finalAmountPaise = when {
-                amountFromText != null && amountFromText > 0L -> amountFromText
-                amountFromLong > 0L -> amountFromLong
-                else -> 0L
-            }
-
-            val typeStr = item.optString("type", defaultCashType?.name ?: "EXPENSE").uppercase(Locale.US)
-            val parsedType = runCatching { TransactionType.valueOf(typeStr) }.getOrDefault(defaultCashType ?: TransactionType.EXPENSE)
-
-            val rawMerchantField = item.optString("merchant", "unknown").trim().ifBlank { "unknown" }
-            val explicitRawText = item.optString("rawMerchantText", "").trim()
-                .takeIf { !it.equals("unknown", ignoreCase = true) }
-                .orEmpty()
-            val (cleanedMerchant, fallbackRaw) = MoneyUtils.cleanRawUpiOrBankMerchant(rawMerchantField)
-            val finalRawMerchant = explicitRawText.ifBlank { fallbackRaw }
-
-            val note = item.optString("note", "").takeIf { !it.equals("unknown", ignoreCase = true) }.orEmpty()
-            val isAtmWithdrawal = com.example.data.rules.LocalInsightsAndRulesEngine.isAtmCashWithdrawalText(rawMerchantField) ||
-                com.example.data.rules.LocalInsightsAndRulesEngine.isAtmCashWithdrawalText(finalRawMerchant) ||
-                com.example.data.rules.LocalInsightsAndRulesEngine.isAtmCashWithdrawalText(note)
-
-            val type = if (isAtmWithdrawal) TransactionType.TRANSFER else parsedType
-            val rawModeStr = item.optString("paymentMode", defaultPaymentMode).uppercase(Locale.US)
-            val resolvedPaymentMode = when {
-                isAtmWithdrawal -> "CASH"
-                defaultPaymentMode.equals("CASH", ignoreCase = true) -> "CASH"
-                rawModeStr == "CASH" -> "CASH"
-                else -> "ONLINE"
-            }
-
-            val rawPaymentApp = item.optString("paymentApp", if (resolvedPaymentMode == "CASH") "Cash" else "Unknown").trim().ifBlank {
-                if (resolvedPaymentMode == "CASH") "Cash" else "Unknown"
-            }
-            val paymentApp = if (resolvedPaymentMode == "CASH" && (rawPaymentApp.equals("Unknown", ignoreCase = true) || rawPaymentApp.isBlank())) {
-                "Cash"
-            } else {
-                rawPaymentApp
-            }
-
-            val refRaw = item.optString("referenceNumber", "unknown").trim()
-            val referenceNumber = if (refRaw.equals("unknown", ignoreCase = true) || refRaw.isBlank()) null else refRaw
-
-            val statusStr = item.optString("status", "SUCCESS").uppercase(Locale.US)
-            val status = runCatching { TransactionStatus.valueOf(statusStr) }.getOrDefault(TransactionStatus.SUCCESS)
-
-            val rawCategory = item.optString("suggestedCategory", "Other")
-            val validCategory = when {
-                isAtmWithdrawal || type == TransactionType.TRANSFER -> "Transfers"
-                else -> allowedCategories.firstOrNull { it.equals(rawCategory, ignoreCase = true) }
-                    ?: if (type == TransactionType.EARNING) "Other Income" else "Other"
-            }
-
-            val confidence = item.optDouble("confidence", 0.85).toFloat().coerceIn(0f, 1f)
-            val suggestedSplitWays = item.optInt("suggestedSplitWays", 1).coerceIn(1, 20)
-
-            val lineItemsArray = item.optJSONArray("lineItems")
-            val parsedLineItems = mutableListOf<ReceiptLineItem>()
-            if (lineItemsArray != null) {
-                for (j in 0 until lineItemsArray.length()) {
-                    val liObj = lineItemsArray.optJSONObject(j) ?: continue
-                    val liName = liObj.optString("itemName", "").trim()
-                    if (liName.isEmpty() || liName.equals("unknown", ignoreCase = true)) continue
-                    val liQty = liObj.optInt("quantity", 1).coerceAtLeast(1)
-                    val liPriceText = liObj.optString("priceText", "")
-                    val liPaise = MoneyUtils.parseRupeesToPaise(liPriceText)
-                        ?: liObj.optLong("pricePaise", 0L)
-                    if (liPaise > 0L) {
-                        parsedLineItems.add(
-                            ReceiptLineItem(
-                                itemName = liName,
-                                quantity = liQty,
-                                pricePaise = liPaise,
-                                isSelectedForSplit = true
-                            )
-                        )
-                    }
-                }
-            }
-
-            val baseDraft = DraftTransaction(
-                timestamp = timestampMillis,
-                hasExplicitTime = hasExplicitTime,
-                amountPaise = finalAmountPaise,
-                originalAmountPaise = finalAmountPaise,
-                type = type,
-                merchant = cleanedMerchant,
-                rawMerchantText = finalRawMerchant,
-                category = validCategory,
-                paymentApp = paymentApp,
-                referenceNumber = referenceNumber,
-                status = status,
-                note = note,
-                source = source,
-                confidence = confidence,
-                lineItems = parsedLineItems,
-                paymentMode = resolvedPaymentMode
-            )
-
-            val finalDraft = if (suggestedSplitWays > 1) {
-                baseDraft.applyEqualSplit(suggestedSplitWays)
-            } else {
-                baseDraft
-            }
-
-            drafts.add(finalDraft)
-        }
-
-        return ExtractionResult.Success(drafts)
-    }
-
-    private fun decodeScaledBitmap(uri: Uri): Bitmap? {
-        return try {
-            val bytes = context.contentResolver.openInputStream(uri)?.use { it.readBytes() } ?: return null
-            val boundsOptions = BitmapFactory.Options().apply { inJustDecodeBounds = true }
-            BitmapFactory.decodeByteArray(bytes, 0, bytes.size, boundsOptions)
-            val maxDim = 1600
-            var sampleSize = 1
-            while (boundsOptions.outWidth / sampleSize > maxDim || boundsOptions.outHeight / sampleSize > maxDim) {
-                sampleSize *= 2
-            }
-            val decodeOptions = BitmapFactory.Options().apply { inSampleSize = sampleSize }
-            BitmapFactory.decodeByteArray(bytes, 0, bytes.size, decodeOptions)
-        } catch (e: Exception) {
-            Log.e(TAG, "Failed to decode image URI: $uri", e)
-            null
-        }
-    }
-
-    private fun getPdfPageCount(uri: Uri): Int {
-        return try {
-            context.contentResolver.openFileDescriptor(uri, "r")?.use { pfd ->
-                PdfRenderer(pfd).use { renderer ->
-                    min(renderer.pageCount, 15)
-                }
-            } ?: 0
-        } catch (e: Exception) {
-            Log.e(TAG, "Failed to read PDF page count", e)
-            0
-        }
-    }
-
-    private fun renderPdfPageToBitmap(uri: Uri, pageIndex: Int): Bitmap? {
-        return try {
-            context.contentResolver.openFileDescriptor(uri, "r")?.use { pfd ->
-                PdfRenderer(pfd).use { renderer ->
-                    if (pageIndex < 0 || pageIndex >= renderer.pageCount) return null
-                    renderer.openPage(pageIndex).use { page ->
-                        val scale = 2
-                        val width = (page.width * scale).coerceAtMost(1800)
-                        val height = (page.height * scale).coerceAtMost(2400)
-                        val bitmap = Bitmap.createBitmap(width, height, Bitmap.Config.ARGB_8888)
-                        val canvas = Canvas(bitmap)
-                        canvas.drawColor(Color.WHITE)
-                        page.render(bitmap, null, null, PdfRenderer.Page.RENDER_MODE_FOR_DISPLAY)
-                        bitmap
-                    }
-                }
-            }
-        } catch (e: Exception) {
-            Log.e(TAG, "Failed to render PDF page $pageIndex", e)
-            null
+        val totalElapsed = (SystemClock.elapsedRealtime() - totalStart).coerceAtLeast(1L)
+        val log = ScanLogEntry(
+            ocrTextMs = ocrMs,
+            regexMs = regexMs,
+            visionFallbackMs = visionTelemetry.visionMs,
+            totalMs = totalElapsed,
+            path = ScanPath.VISION_AI,
+            retries = visionTelemetry.retries,
+            promptTokens = visionTelemetry.promptTokens,
+            outputTokens = visionTelemetry.outputTokens
+        )
+        when (val r = visionTelemetry.result) {
+            is ExtractionResult.Success -> ExtractionResult.Success(r.drafts, log)
+            is ExtractionResult.RateLimited -> r.copy(logEntry = log)
+            is ExtractionResult.UnreadableOrNoPayments -> r.copy(logEntry = log)
+            is ExtractionResult.Error -> r.copy(logEntry = log)
+            else -> r
         }
     }
 
     /**
-     * Generates a realistic UPI & itemized receipt screenshot bitmap on-device so Yu can test
-     * Gemini's UPI merchant cleanup (`UPI/431988.../BLUE TOKAI/BLR` -> `Blue Tokai`) and
-     * itemized bill-split calculator (`Iced Latte` + `Almond Croissant`) even on a fresh emulator.
+     * Generates a realistic UPI & itemized receipt screenshot bitmap on-device for sample testing.
      */
     fun createSampleUpiScreenshotBitmap(presetIndex: Int): Bitmap {
         val width = 900

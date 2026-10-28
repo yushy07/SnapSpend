@@ -2055,8 +2055,12 @@ fun EditorialTransactionCard(
                                 maxLines = 1,
                                 overflow = TextOverflow.Ellipsis
                             )
-                            if (transaction.paymentMode.equals("CASH", ignoreCase = true)) {
+                            if (transaction.isAtmWithdrawal) {
+                                AtmWithdrawalBadge(modifier = Modifier.testTag("atm_badge_${transaction.id}"))
+                            } else if (transaction.paymentMode.equals("CASH", ignoreCase = true)) {
                                 CashModeBadge(modifier = Modifier.testTag("cash_badge_${transaction.id}"))
+                            } else {
+                                OnlineModeBadge(modifier = Modifier.testTag("online_badge_${transaction.id}"))
                             }
                             Text(
                                 text = "· ${MoneyUtils.formatShortDateTime(transaction.timestamp, transaction.hasExplicitTime)}",
@@ -2087,6 +2091,9 @@ fun EditorialTransactionCard(
                             text = transaction.status.name,
                             backgroundColor = if (transaction.status == TransactionStatus.PENDING) SunnyYellow else PureWhite
                         )
+                    } else if (transaction.isAtmWithdrawal) {
+                        Spacer(modifier = Modifier.height(3.dp))
+                        StatusPillBadge(text = "ATM → Cash", backgroundColor = SunnyYellow)
                     } else if (isSplitBill) {
                         Spacer(modifier = Modifier.height(3.dp))
                         StatusPillBadge(text = "Split bill", backgroundColor = PureWhite)
@@ -2121,6 +2128,62 @@ fun CashModeBadge(
                 fontSize = 9.sp,
                 fontWeight = FontWeight.Black,
                 letterSpacing = 0.3.sp
+            ),
+            color = InkBlack,
+            maxLines = 1
+        )
+    }
+}
+
+/**
+ * Clean Aqua (#8FE3F0) [UPI / ONLINE] pill badge with black border and black text
+ * displayed next to the category name on online transactions.
+ */
+@Composable
+fun OnlineModeBadge(
+    modifier: Modifier = Modifier
+) {
+    Surface(
+        modifier = modifier,
+        shape = CircleShape,
+        color = EditorialAqua,
+        border = BorderStroke(1.3.dp, InkBlack)
+    ) {
+        Text(
+            text = "UPI / ONLINE",
+            modifier = Modifier.padding(horizontal = 7.dp, vertical = 1.5.dp),
+            style = MaterialTheme.typography.labelSmall.copy(
+                fontSize = 9.sp,
+                fontWeight = FontWeight.Black,
+                letterSpacing = 0.2.sp
+            ),
+            color = InkBlack,
+            maxLines = 1
+        )
+    }
+}
+
+/**
+ * Mint Green (#9FE3C0) [ATM WDL] pill badge with black border and black text
+ * displayed on ATM withdrawals that top up Cash in Hand without counting as Spent.
+ */
+@Composable
+fun AtmWithdrawalBadge(
+    modifier: Modifier = Modifier
+) {
+    Surface(
+        modifier = modifier,
+        shape = CircleShape,
+        color = EditorialMint,
+        border = BorderStroke(1.3.dp, InkBlack)
+    ) {
+        Text(
+            text = "ATM WDL",
+            modifier = Modifier.padding(horizontal = 7.dp, vertical = 1.5.dp),
+            style = MaterialTheme.typography.labelSmall.copy(
+                fontSize = 9.sp,
+                fontWeight = FontWeight.Black,
+                letterSpacing = 0.2.sp
             ),
             color = InkBlack,
             maxLines = 1

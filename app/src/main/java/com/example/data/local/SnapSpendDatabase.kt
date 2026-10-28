@@ -73,22 +73,56 @@ abstract class AppDatabase : RoomDatabase() {
         val MIGRATION_3_4 = object : Migration(3, 4) {
             override fun migrate(db: SupportSQLiteDatabase) {
                 db.execSQL("ALTER TABLE transactions ADD COLUMN paymentMode TEXT NOT NULL DEFAULT 'ONLINE'")
+                db.execSQL("ALTER TABLE transactions ADD COLUMN isAtmWithdrawal INTEGER NOT NULL DEFAULT 0")
             }
         }
 
         @Volatile
         private var INSTANCE: AppDatabase? = null
 
+        private fun ensureV4ColumnsIfAlreadyAtV4(context: Context, dbName: String) {
+            val dbFile = context.getDatabasePath(dbName)
+            if (!dbFile.exists()) return
+            runCatching {
+                android.database.sqlite.SQLiteDatabase.openDatabase(
+                    dbFile.absolutePath,
+                    null,
+                    android.database.sqlite.SQLiteDatabase.OPEN_READWRITE
+                ).use { rawDb ->
+                    if (rawDb.version == 4) {
+                        val existingCols = mutableSetOf<String>()
+                        rawDb.rawQuery("PRAGMA table_info(transactions)", null).use { cursor ->
+                            val nameIdx = cursor.getColumnIndex("name")
+                            while (cursor.moveToNext()) {
+                                if (nameIdx >= 0) existingCols.add(cursor.getString(nameIdx))
+                            }
+                        }
+                        if (existingCols.isNotEmpty()) {
+                            if ("paymentMode" !in existingCols) {
+                                rawDb.execSQL("ALTER TABLE transactions ADD COLUMN paymentMode TEXT NOT NULL DEFAULT 'ONLINE'")
+                            }
+                            if ("isAtmWithdrawal" !in existingCols) {
+                                rawDb.execSQL("ALTER TABLE transactions ADD COLUMN isAtmWithdrawal INTEGER NOT NULL DEFAULT 0")
+                            }
+                        }
+                    }
+                }
+            }
+        }
+
         fun getInstance(context: Context): AppDatabase {
             return INSTANCE ?: synchronized(this) {
-                INSTANCE ?: Room.databaseBuilder(
-                    context.applicationContext,
-                    AppDatabase::class.java,
-                    "snapspend_local.db"
-                )
-                    .addMigrations(MIGRATION_2_3, MIGRATION_3_4)
-                    .build()
-                    .also { INSTANCE = it }
+                INSTANCE ?: run {
+                    ensureV4ColumnsIfAlreadyAtV4(context.applicationContext, "snapspend_local.db")
+                    Room.databaseBuilder(
+                        context.applicationContext,
+                        AppDatabase::class.java,
+                        "snapspend_local.db"
+                    )
+                        .addMigrations(MIGRATION_2_3, MIGRATION_3_4)
+                        .build()
+                        .also { INSTANCE = it }
+                }
             }
         }
     }

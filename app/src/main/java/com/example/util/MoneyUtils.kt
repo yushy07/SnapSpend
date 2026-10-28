@@ -332,4 +332,312 @@ object MoneyUtils {
         return c1.get(Calendar.YEAR) == c2.get(Calendar.YEAR) &&
             c1.get(Calendar.DAY_OF_YEAR) == c2.get(Calendar.DAY_OF_YEAR)
     }
+
+    data class ParsedDateResult(
+        val dateIso: String?,
+        val time24h: String?,
+        val dateFound: Boolean,
+        val rejectedFutureDate: Boolean = false
+    )
+
+    private val MONTH_MAP = mapOf(
+        "jan" to 1, "january" to 1,
+        "feb" to 2, "february" to 2,
+        "mar" to 3, "march" to 3,
+        "apr" to 4, "april" to 4,
+        "may" to 5,
+        "jun" to 6, "june" to 6,
+        "jul" to 7, "july" to 7,
+        "aug" to 8, "august" to 8,
+        "sep" to 9, "sept" to 9, "september" to 9,
+        "oct" to 10, "october" to 10,
+        "nov" to 11, "november" to 11,
+        "dec" to 12, "december" to 12
+    )
+
+    private val MONTH_SHORT_NAMES = arrayOf(
+        "", "Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"
+    )
+
+    // Matches "28 Oct 2026", "28 October 2026 at 9:42 am", "28-Oct-2026", "28 Oct 26", "28 Oct"
+    private val DAY_FIRST_MONTH_NAME_REGEX = Regex(
+        """\b(\d{1,2})[\s\-]+(Jan(?:uary)?|Feb(?:ruary)?|Mar(?:ch)?|Apr(?:il)?|May|Jun(?:e)?|Jul(?:y)?|Aug(?:ust)?|Sep(?:t(?:ember)?)?|Oct(?:ober)?|Nov(?:ember)?|Dec(?:ember)?)(?:[\s,\-]+(\d{2,4}))?(?:\s*(?:at|,|-)?\s*(\d{1,2}:\d{2}\s*(?:AM|PM|am|pm)?))?(?=\b|\s|$)""",
+        RegexOption.IGNORE_CASE
+    )
+
+    // Matches "Oct 28, 2026", "October 28 2026 at 9:42 pm", "Oct 28"
+    private val MONTH_FIRST_NAME_REGEX = Regex(
+        """\b(Jan(?:uary)?|Feb(?:ruary)?|Mar(?:ch)?|Apr(?:il)?|May|Jun(?:e)?|Jul(?:y)?|Aug(?:ust)?|Sep(?:t(?:ember)?)?|Oct(?:ober)?|Nov(?:ember)?|Dec(?:ember)?)\s+(\d{1,2})(?:,\s*|\s+)(\d{4}|\d{2})?(?:\s*(?:at|,|-)?\s*(\d{1,2}:\d{2}\s*(?:AM|PM|am|pm)?))?(?=\b|\s|$)""",
+        RegexOption.IGNORE_CASE
+    )
+
+    // Also match "Oct 28" without year
+    private val MONTH_FIRST_NO_YEAR_REGEX = Regex(
+        """\b(Jan(?:uary)?|Feb(?:ruary)?|Mar(?:ch)?|Apr(?:il)?|May|Jun(?:e)?|Jul(?:y)?|Aug(?:ust)?|Sep(?:t(?:ember)?)?|Oct(?:ober)?|Nov(?:ember)?|Dec(?:ember)?)\s+(\d{1,2})\b""",
+        RegexOption.IGNORE_CASE
+    )
+
+    // Matches Indian day-first numeric dates: "28/10/2026", "28-10-2026", "28/10/26", "04/10/2026"
+    private val NUMERIC_DATE_REGEX = Regex(
+        """\b(\d{1,2})[/-](\d{1,2})[/-](\d{2,4})\b"""
+    )
+
+    private val STANDALONE_TIME_REGEX = Regex(
+        """\b(\d{1,2}:\d{2}\s*(?:AM|PM|am|pm))\b|\b([01]?\d|2[0-3]):([0-5]\d)\b"""
+    )
+
+    /**
+     * Parses Indian receipt/UPI dates:
+     * - "28 Oct 2026", "Oct 28, 2026", "28 October 2026 at 9:42 am", "28 Oct", "28/10/26", "28-10-2026"
+     * - Two-digit years become 20xx.
+     * - If the year is missing ("28 Oct"), uses the most recent such date that is NOT in the future.
+     * - Rejects future dates (beyond end of today in device time zone).
+     */
+    fun parseFlexibleIndianDate(
+        text: String,
+        nowMillis: Long = System.currentTimeMillis()
+    ): ParsedDateResult {
+        if (text.isBlank()) return ParsedDateResult(null, null, false)
+
+        val nowCal = Calendar.getInstance().apply { timeInMillis = nowMillis }
+        val endOfTodayCal = (nowCal.clone() as Calendar).apply {
+            set(Calendar.HOUR_OF_DAY, 23)
+            set(Calendar.MINUTE, 59)
+            set(Calendar.SECOND, 59)
+            set(Calendar.MILLISECOND, 999)
+        }
+
+        val standaloneTime = extractTime24h(text)
+
+        // Check explicit "Today" / "Yesterday"
+        if (Regex("""\bToday\b""", RegexOption.IGNORE_CASE).containsMatchIn(text)) {
+            val iso = formatIsoDate(nowCal.timeInMillis)
+            return ParsedDateResult(dateIso = iso, time24h = standaloneTime, dateFound = true)
+        }
+        if (Regex("""\bYesterday\b""", RegexOption.IGNORE_CASE).containsMatchIn(text)) {
+            val yest = (nowCal.clone() as Calendar).apply { add(Calendar.DAY_OF_YEAR, -1) }
+            val iso = formatIsoDate(yest.timeInMillis)
+            return ParsedDateResult(dateIso = iso, time24h = standaloneTime, dateFound = true)
+        }
+
+        var sawRejectedFuture = false
+
+        // 1. Day-first with month name ("28 Oct 2026", "28 October 2026 at 9:42 am", "28 Oct")
+        for (match in DAY_FIRST_MONTH_NAME_REGEX.findAll(text)) {
+            val day = match.groupValues[1].toIntOrNull() ?: continue
+            val monthName = match.groupValues[2].lowercase(Locale.US)
+            val month = MONTH_MAP[monthName] ?: continue
+            val yearRaw = match.groupValues[3].takeIf { it.isNotBlank() }
+            val inlineTime = match.groupValues[4].takeIf { it.isNotBlank() }?.let { parseTimeTokenTo24h(it) }
+
+            val resolved = resolveCandidateDate(day, month, yearRaw, nowCal, endOfTodayCal)
+            if (resolved != null) {
+                if (resolved.second) {
+                    sawRejectedFuture = true
+                } else if (resolved.first != null) {
+                    return ParsedDateResult(
+                        dateIso = resolved.first,
+                        time24h = inlineTime ?: standaloneTime,
+                        dateFound = true
+                    )
+                }
+            }
+        }
+
+        // 2. Month-first with year ("Oct 28, 2026", "Oct 28 2026")
+        for (match in MONTH_FIRST_NAME_REGEX.findAll(text)) {
+            val monthName = match.groupValues[1].lowercase(Locale.US)
+            val month = MONTH_MAP[monthName] ?: continue
+            val day = match.groupValues[2].toIntOrNull() ?: continue
+            val yearRaw = match.groupValues[3].takeIf { it.isNotBlank() }
+            val inlineTime = match.groupValues[4].takeIf { it.isNotBlank() }?.let { parseTimeTokenTo24h(it) }
+
+            val resolved = resolveCandidateDate(day, month, yearRaw, nowCal, endOfTodayCal)
+            if (resolved != null) {
+                if (resolved.second) {
+                    sawRejectedFuture = true
+                } else if (resolved.first != null) {
+                    return ParsedDateResult(
+                        dateIso = resolved.first,
+                        time24h = inlineTime ?: standaloneTime,
+                        dateFound = true
+                    )
+                }
+            }
+        }
+
+        // 3. Month-first without year ("Oct 28")
+        for (match in MONTH_FIRST_NO_YEAR_REGEX.findAll(text)) {
+            val monthName = match.groupValues[1].lowercase(Locale.US)
+            val month = MONTH_MAP[monthName] ?: continue
+            val day = match.groupValues[2].toIntOrNull() ?: continue
+
+            val resolved = resolveCandidateDate(day, month, null, nowCal, endOfTodayCal)
+            if (resolved != null && !resolved.second && resolved.first != null) {
+                return ParsedDateResult(
+                    dateIso = resolved.first,
+                    time24h = standaloneTime,
+                    dateFound = true
+                )
+            }
+        }
+
+        // 4. Numeric day-first ("28/10/26", "28-10-2026") or ISO ("2026-10-28")
+        for (match in NUMERIC_DATE_REGEX.findAll(text)) {
+            val p1 = match.groupValues[1].toIntOrNull() ?: continue
+            val p2 = match.groupValues[2].toIntOrNull() ?: continue
+            val p3Str = match.groupValues[3]
+            val p3 = p3Str.toIntOrNull() ?: continue
+
+            val (day, month, yearRaw) = if (match.groupValues[1].length == 4 && p1 in 1990..2100) {
+                Triple(p3, p2, match.groupValues[1])
+            } else {
+                Triple(p1, p2, p3Str)
+            }
+
+            val resolved = resolveCandidateDate(day, month, yearRaw, nowCal, endOfTodayCal)
+            if (resolved != null) {
+                if (resolved.second) {
+                    sawRejectedFuture = true
+                } else if (resolved.first != null) {
+                    return ParsedDateResult(
+                        dateIso = resolved.first,
+                        time24h = standaloneTime,
+                        dateFound = true
+                    )
+                }
+            }
+        }
+
+        return ParsedDateResult(
+            dateIso = null,
+            time24h = standaloneTime,
+            dateFound = false,
+            rejectedFutureDate = sawRejectedFuture
+        )
+    }
+
+    /**
+     * Resolves (day, month, optionalYear) into Pair(isoDateString?, isRejectedFuture).
+     * Returns null if day/month is invalid (e.g. month > 12 or Feb 30).
+     */
+    private fun resolveCandidateDate(
+        day: Int,
+        month: Int,
+        yearRaw: String?,
+        nowCal: Calendar,
+        endOfTodayCal: Calendar
+    ): Pair<String?, Boolean>? {
+        if (month !in 1..12 || day !in 1..31) return null
+
+        val year = when {
+            yearRaw.isNullOrBlank() -> {
+                // Missing year: pick current year if <= today, else previous year
+                val currentYear = nowCal.get(Calendar.YEAR)
+                val candidateThisYear = buildStrictCalendar(currentYear, month, day) ?: return null
+                if (candidateThisYear.timeInMillis <= endOfTodayCal.timeInMillis) {
+                    currentYear
+                } else {
+                    currentYear - 1
+                }
+            }
+            yearRaw.length == 2 -> {
+                val twoDigit = yearRaw.toIntOrNull() ?: return null
+                2000 + twoDigit
+            }
+            yearRaw.length == 4 -> {
+                yearRaw.toIntOrNull() ?: return null
+            }
+            else -> return null
+        }
+
+        if (year !in 1990..2100) return null
+        val cal = buildStrictCalendar(year, month, day) ?: return null
+        if (cal.timeInMillis > endOfTodayCal.timeInMillis) {
+            return null to true
+        }
+        return String.format(Locale.US, "%04d-%02d-%02d", year, month, day) to false
+    }
+
+    private fun buildStrictCalendar(year: Int, month: Int, day: Int): Calendar? {
+        return try {
+            Calendar.getInstance().apply {
+                isLenient = false
+                set(Calendar.YEAR, year)
+                set(Calendar.MONTH, month - 1)
+                set(Calendar.DAY_OF_MONTH, day)
+                set(Calendar.HOUR_OF_DAY, 12)
+                set(Calendar.MINUTE, 0)
+                set(Calendar.SECOND, 0)
+                set(Calendar.MILLISECOND, 0)
+                // Trigger validation
+                timeInMillis
+            }
+        } catch (_: Exception) {
+            null
+        }
+    }
+
+    private fun extractTime24h(text: String): String? {
+        // Prefer AM/PM time first so dates or ratios aren't mistaken for 24h time
+        val amPmRegex = Regex("""\b(\d{1,2}:\d{2}\s*(?:AM|PM|am|pm))\b""")
+        amPmRegex.find(text)?.let { m ->
+            parseTimeTokenTo24h(m.groupValues[1])?.let { return it }
+        }
+        val match = STANDALONE_TIME_REGEX.find(text) ?: return null
+        return parseTimeTokenTo24h(match.value)
+    }
+
+    private fun parseTimeTokenTo24h(rawTime: String): String? {
+        val cleaned = rawTime.trim()
+        return try {
+            if (cleaned.contains(Regex("""(?i)am|pm"""))) {
+                val normalized = cleaned.replace(Regex("""\s+"""), " ").uppercase(Locale.US)
+                val parsed = SimpleDateFormat("hh:mm a", Locale.US).parse(normalized)
+                if (parsed != null) SimpleDateFormat("HH:mm", Locale.US).format(parsed) else null
+            } else {
+                val parts = cleaned.split(":")
+                val hh = parts.getOrNull(0)?.toIntOrNull() ?: return null
+                val mm = parts.getOrNull(1)?.take(2)?.toIntOrNull() ?: return null
+                if (hh in 0..23 && mm in 0..59) {
+                    String.format(Locale.US, "%02d:%02d", hh, mm)
+                } else null
+            }
+        } catch (_: Exception) {
+            null
+        }
+    }
+
+    /**
+     * Converts Indian day-first numeric dates ("04/10/2026", "04-10-26") into unambiguous
+     * month-name dates ("4 Oct 2026") before sending text to Gemini so DD/MM and MM/DD are never confused.
+     */
+    fun normalizeNumericDatesInTextForAi(text: String): String {
+        if (text.isBlank()) return text
+        return NUMERIC_DATE_REGEX.replace(text) { match ->
+            val d = match.groupValues[1].toIntOrNull()
+            val m = match.groupValues[2].toIntOrNull()
+            val yStr = match.groupValues[3]
+            val y = when (yStr.length) {
+                2 -> yStr.toIntOrNull()?.let { 2000 + it }
+                4 -> yStr.toIntOrNull()
+                else -> null
+            }
+            if (d != null && m != null && y != null && d in 1..31 && m in 1..12 && y in 1990..2100) {
+                "$d ${MONTH_SHORT_NAMES[m]} $y"
+            } else {
+                match.value
+            }
+        }
+    }
+
+    /**
+     * Computes a lowercase hex SHA-256 hash of normalized text for local SKIPPED_KNOWN deduplication.
+     */
+    fun sha256Hex(input: String): String {
+        val normalized = input.trim().lowercase(Locale.US).replace(Regex("""\s+"""), " ")
+        val digest = java.security.MessageDigest.getInstance("SHA-256")
+        val bytes = digest.digest(normalized.toByteArray(Charsets.UTF_8))
+        return bytes.joinToString("") { "%02x".format(it) }
+    }
 }
