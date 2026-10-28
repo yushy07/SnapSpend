@@ -127,7 +127,7 @@ class ExampleRobolectricTest {
     fun roomDatabase_persistsPaiseTransactionsAndUpdatesPendingToSuccess(): Unit = runBlocking {
         repository.ensureDefaultCategoriesSeeded()
         val categories = repository.getAllCategoriesOnce()
-        assertEquals(18, categories.size)
+        assertEquals(19, categories.size)
 
         val (ts, hasTime) = MoneyUtils.parseDateAndTime("2026-10-25", "11:30")
         val pendingTx = TransactionEntity(

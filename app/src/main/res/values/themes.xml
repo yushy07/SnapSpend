@@ -1,5 +1,13 @@
 <?xml version="1.0" encoding="utf-8"?>
 <resources>
 
-    <style name="Theme.MyApplication" parent="android:Theme.DeviceDefault.NoActionBar" />
+    <style name="Theme.SnapSpend" parent="android:Theme.DeviceDefault.NoActionBar" />
+    <style name="Theme.MyApplication" parent="Theme.SnapSpend" />
+
+    <!-- Android 12+ / core-splashscreen Starting Theme -->
+    <style name="Theme.SnapSpend.Starting" parent="Theme.SplashScreen">
+        <item name="windowSplashScreenBackground">#F7EBE1</item>
+        <item name="windowSplashScreenAnimatedIcon">@drawable/ic_snapspend_splash_logo</item>
+        <item name="postSplashScreenTheme">@style/Theme.SnapSpend</item>
+    </style>
 </resources>

@@ -1027,18 +1027,46 @@ class SnapSpendViewModel(application: Application) : AndroidViewModel(applicatio
             onFinished()
             return
         }
-        val fileName = if (uris.size > 1) {
-            "${uris.size}_Receipts.jpg"
-        } else {
-            resolveFileName(getApplication(), uris.firstOrNull())
-        }
-        enqueueSequentialScanJob(
-            PendingBackgroundScanJob(
-                fileNameOrType = fileName,
-                uris = uris,
-                onCleanup = onFinished
+        viewModelScope.launch(Dispatchers.IO) {
+            val context = getApplication<Application>()
+            val safeUris = uris.map { uri ->
+                try {
+                    if (uri.scheme == "file") {
+                        uri
+                    } else {
+                        val tempFile = java.io.File(
+                            context.cacheDir,
+                            "scan_cached_${System.currentTimeMillis()}_${java.util.UUID.randomUUID().toString().take(6)}.jpg"
+                        )
+                        context.contentResolver.openInputStream(uri)?.use { input ->
+                            tempFile.outputStream().use { output ->
+                                input.copyTo(output)
+                            }
+                        }
+                        if (tempFile.exists() && tempFile.length() > 0L) {
+                            Uri.fromFile(tempFile)
+                        } else {
+                            uri
+                        }
+                    }
+                } catch (e: Exception) {
+                    android.util.Log.w("SnapSpendViewModel", "Could not cache URI $uri locally, using original", e)
+                    uri
+                }
+            }
+            val fileName = if (safeUris.size > 1) {
+                "${safeUris.size}_Receipts.jpg"
+            } else {
+                resolveFileName(context, safeUris.firstOrNull())
+            }
+            enqueueSequentialScanJob(
+                PendingBackgroundScanJob(
+                    fileNameOrType = fileName,
+                    uris = safeUris,
+                    onCleanup = onFinished
+                )
             )
-        )
+        }
     }
 
     fun scanSampleUpiScreenshotWithGemini(presetIndex: Int) {
@@ -1939,26 +1967,73 @@ class SnapSpendViewModel(application: Application) : AndroidViewModel(applicatio
                 _activeScanState.value = _activeScanState.value?.copy(resultDrafts = remainingUnverified)
             }
 
+            val hasHistoricalOrStatementRows = verifiedToCommit.any { draft ->
+                val draftMonth = java.util.Calendar.getInstance().apply { timeInMillis = draft.timestamp }.get(java.util.Calendar.MONTH)
+                val currentMonth = java.util.Calendar.getInstance().get(java.util.Calendar.MONTH)
+                draftMonth != currentMonth
+            } || verifiedToCommit.size >= 3
+
+            val span = if (hasHistoricalOrStatementRows) formatStatementMonthSpan(verifiedToCommit) else ""
+
+            if (hasHistoricalOrStatementRows) {
+                _filterState.value = _filterState.value.copy(dateRange = DateRangeFilter.ALL)
+                _chartControl.value = _chartControl.value.copy(chartDateRange = DateRangeFilter.ALL)
+            }
+
             if (summary.insertedIds.isNotEmpty()) {
+                val bannerMsg = if (hasHistoricalOrStatementRows && span.isNotBlank()) {
+                    "Imported ${summary.insertedIds.size} transactions ($span) · Showing updated charts"
+                } else {
+                    "Confirmed ${summary.insertedIds.size} verified payment${if (summary.insertedIds.size == 1) "" else "s"}"
+                }
                 _undoBannerState.value = UndoBannerState(
                     actionToken = ++undoActionTokenCounter,
-                    message = "Confirmed ${summary.insertedIds.size} verified payment${if (summary.insertedIds.size == 1) "" else "s"}",
+                    message = bannerMsg,
                     transactionId = summary.insertedIds.first(),
                     kind = UndoActionKind.QUICK_CASH_BATCH_DELETE,
                     transactionIds = summary.insertedIds
                 )
+                if (hasHistoricalOrStatementRows && span.isNotBlank()) {
+                    _toastMessage.value = "Imported ${summary.insertedIds.size} transactions ($span) · Showing updated charts"
+                }
             } else {
                 _toastMessage.value = "${verifiedToCommit.size} verified updated!"
             }
         }
     }
 
+    private fun formatStatementMonthSpan(drafts: List<DraftTransaction>): String {
+        val validTimestamps = drafts.filter { it.timestamp > 0L }.map { it.timestamp }
+        if (validTimestamps.isEmpty()) return ""
+        val minTs = validTimestamps.minOrNull() ?: return ""
+        val maxTs = validTimestamps.maxOrNull() ?: return ""
+
+        val calMin = java.util.Calendar.getInstance().apply { timeInMillis = minTs }
+        val calMax = java.util.Calendar.getInstance().apply { timeInMillis = maxTs }
+
+        val monthFormat = java.text.SimpleDateFormat("MMM", java.util.Locale.US)
+        val yearMin = calMin.get(java.util.Calendar.YEAR)
+        val yearMax = calMax.get(java.util.Calendar.YEAR)
+
+        val monthMin = monthFormat.format(java.util.Date(minTs))
+        val monthMax = monthFormat.format(java.util.Date(maxTs))
+
+        return if (calMin.get(java.util.Calendar.MONTH) == calMax.get(java.util.Calendar.MONTH) && yearMin == yearMax) {
+            "$monthMin $yearMin"
+        } else if (yearMin == yearMax) {
+            "$monthMin–$monthMax $yearMin"
+        } else {
+            "$monthMin $yearMin – $monthMax $yearMax"
+        }
+    }
+
     fun confirmAllReviewDrafts(onComplete: () -> Unit = {}) {
         val current = _scanState.value as? ScanUiState.ReviewReady ?: return
         viewModelScope.launch {
+            val validDrafts = current.drafts.filter { !it.isSkipped }
             val summary = commitDraftSubsetAndAdjustCashWallet(current.drafts)
             recordConfirmedScanHashesForDrafts(
-                drafts = current.drafts.filter { !it.isSkipped },
+                drafts = validDrafts,
                 insertedIds = summary.insertedIds
             )
             synchronized(accumulatedReviewDrafts) {
@@ -1972,14 +2047,36 @@ class SnapSpendViewModel(application: Application) : AndroidViewModel(applicatio
             if (_queuedScans.value.isEmpty()) {
                 ShareIntentHelper.cleanupActiveShareTempFiles()
             }
+
+            val hasHistoricalOrStatementRows = validDrafts.any { draft ->
+                val draftMonth = java.util.Calendar.getInstance().apply { timeInMillis = draft.timestamp }.get(java.util.Calendar.MONTH)
+                val currentMonth = java.util.Calendar.getInstance().get(java.util.Calendar.MONTH)
+                draftMonth != currentMonth
+            } || validDrafts.size >= 3
+
+            val span = if (hasHistoricalOrStatementRows) formatStatementMonthSpan(validDrafts) else ""
+
+            if (hasHistoricalOrStatementRows) {
+                _filterState.value = _filterState.value.copy(dateRange = DateRangeFilter.ALL)
+                _chartControl.value = _chartControl.value.copy(chartDateRange = DateRangeFilter.ALL)
+            }
+
             if (summary.insertedIds.isNotEmpty()) {
+                val bannerMsg = if (hasHistoricalOrStatementRows && span.isNotBlank()) {
+                    "Imported ${summary.insertedCount} transactions ($span) · Showing updated charts"
+                } else {
+                    "Saved ${summary.insertedCount} payment${if (summary.insertedCount == 1) "" else "s"}"
+                }
                 _undoBannerState.value = UndoBannerState(
                     actionToken = ++undoActionTokenCounter,
-                    message = "Saved ${summary.insertedCount} payment${if (summary.insertedCount == 1) "" else "s"}",
+                    message = bannerMsg,
                     transactionId = summary.insertedIds.first(),
                     kind = UndoActionKind.QUICK_CASH_BATCH_DELETE,
                     transactionIds = summary.insertedIds
                 )
+                if (hasHistoricalOrStatementRows && span.isNotBlank()) {
+                    _toastMessage.value = "Imported ${summary.insertedCount} transactions ($span) · Showing updated charts"
+                }
             } else {
                 val msgParts = mutableListOf<String>()
                 if (summary.insertedCount > 0) msgParts.add("${summary.insertedCount} saved")

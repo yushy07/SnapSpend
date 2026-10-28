@@ -1,0 +1,11 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <style name="Theme.SnapSpend" parent="android:Theme.DeviceDefault.NoActionBar" />
+    <style name="Theme.MyApplication" parent="Theme.SnapSpend" />
+
+    <style name="Theme.SnapSpend.Starting" parent="Theme.SplashScreen">
+        <item name="windowSplashScreenBackground">#1C1917</item>
+        <item name="windowSplashScreenAnimatedIcon">@drawable/ic_snapspend_splash_logo</item>
+        <item name="postSplashScreenTheme">@style/Theme.SnapSpend</item>
+    </style>
+</resources>

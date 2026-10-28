@@ -441,6 +441,8 @@ class GeminiReceiptExtractor(private val context: Context) {
         var outputTok = 0
         var preFilterTok = 0
         var postFilterTok = 0
+        var lastOcrResult: LocalExtractionResult? = null
+        var lastRegexResult: RegexPreProcessResult? = null
 
         try {
             // STEP 1: On-Device Extraction (PDFBox native text first, ML Kit OCR fallback)
@@ -460,6 +462,7 @@ class GeminiReceiptExtractor(private val context: Context) {
                     logEntry = log
                 )
             }
+            lastOcrResult = ocrResult
             readMs = ocrResult.readFileMs
             ocrMs = ocrResult.ocrTextMs
 
@@ -473,6 +476,7 @@ class GeminiReceiptExtractor(private val context: Context) {
                 merchantMemories = merchantMemories,
                 source = source
             )
+            lastRegexResult = regexResult
             regexMs = (SystemClock.elapsedRealtime() - regexStart).coerceAtLeast(1L)
 
             val cleanedText = regexResult.cleanedText
@@ -528,6 +532,77 @@ class GeminiReceiptExtractor(private val context: Context) {
                             logEntry = log
                         )
                     }
+                }
+            }
+
+            // STEP 2.5: Co-Pilot Hybrid Pipeline: Deterministic Local Statement Parser + Mandatory Gemini 3.8-Flash AI Enrichment
+            val matchingStatementParser = BankStatementParserRegistry.findMatchingParser(cleanedText)
+            if (matchingStatementParser != null) {
+                val statementDrafts = matchingStatementParser.parse(cleanedText)
+                if (statementDrafts.isNotEmpty()) {
+                    if (!isDeviceOnline()) {
+                        val totalElapsed = (SystemClock.elapsedRealtime() - totalStart).coerceAtLeast(1L)
+                        val log = ScanLogEntry(
+                            readFileMs = readMs,
+                            ocrTextMs = ocrMs,
+                            regexMs = regexMs,
+                            totalMs = totalElapsed,
+                            path = ScanPath.TEXT_AI
+                        )
+                        return@withContext PerFileScanOutcome(
+                            uri = uri,
+                            result = ExtractionResult.RateLimited("Offline. Scan queued and will retry when online.", log),
+                            logEntry = log
+                        )
+                    }
+
+                    onProgress("AI Co-Pilot: Enriching & categorising statement rows...")
+                    val aiStart = SystemClock.elapsedRealtime()
+                    val filtered = StatementLineFilter.filterStatementLines(cleanedText)
+                    val textToEnrich = if (filtered.keptTransactionRowCount >= 2) filtered.filteredText else cleanedText
+                    val aiOutcome = callGeminiTextChunk(
+                        textChunk = textToEnrich,
+                        categories = categories,
+                        source = source
+                    )
+                    val aiDuration = (SystemClock.elapsedRealtime() - aiStart).coerceAtLeast(1L)
+                    aiTextMs = aiDuration
+                    retries += aiOutcome.retries
+                    promptTok += aiOutcome.promptTokens
+                    outputTok += aiOutcome.outputTokens
+
+                    val aiDrafts = (aiOutcome.result as? ExtractionResult.Success)?.drafts.orEmpty()
+                    val mergedDrafts = StatementCoPilotMerger.mergeStatementDraftsWithAiEnrichment(
+                        localDrafts = statementDrafts,
+                        aiDrafts = aiDrafts,
+                        rawCleanedText = cleanedText,
+                        sha256Hash = sha256Hash,
+                        regexAnchors = regexResult.detectedAnchors,
+                        categories = categories,
+                        merchantMemories = merchantMemories,
+                        cardBillMode = cardBillMode
+                    )
+
+                    val totalElapsed = (SystemClock.elapsedRealtime() - totalStart).coerceAtLeast(1L)
+                    val log = ScanLogEntry(
+                        readFileMs = readMs,
+                        ocrTextMs = ocrMs,
+                        regexMs = regexMs,
+                        geminiTextMs = aiDuration,
+                        promptTokens = promptTok,
+                        outputTokens = outputTok,
+                        totalMs = totalElapsed,
+                        path = ScanPath.TEXT_AI
+                    )
+                    return@withContext PerFileScanOutcome(
+                        uri = uri,
+                        result = ExtractionResult.Success(
+                            drafts = mergedDrafts,
+                            logEntry = log,
+                            skippedPdfPages = ocrResult.skippedPdfPages
+                        ),
+                        logEntry = log
+                    )
                 }
             }
 
@@ -713,9 +788,53 @@ class GeminiReceiptExtractor(private val context: Context) {
                     }
                     ExtractionResult.Success(verified, log, ocrResult.skippedPdfPages)
                 }
-                is ExtractionResult.RateLimited -> r.copy(logEntry = log)
-                is ExtractionResult.UnreadableOrNoPayments -> r.copy(logEntry = log)
-                is ExtractionResult.Error -> r.copy(logEntry = log)
+                is ExtractionResult.RateLimited -> {
+                    if (ocrResult.isValidText) {
+                        val fallback = UpiRegexPreProcessor.createOnDeviceFallbackDraft(
+                            cleanedText = ocrResult.fullCleanedText,
+                            anchors = regexResult.detectedAnchors,
+                            categories = categories,
+                            merchantMemories = merchantMemories,
+                            source = source,
+                            sha256Hash = sha256Hash.ifBlank { null }
+                        )
+                        val verified = LocalDraftVerifier.verifyAndEnrichDraft(
+                            draft = fallback,
+                            onDeviceText = ocrResult.fullCleanedText,
+                            regexAnchors = regexResult.detectedAnchors,
+                            categories = categories,
+                            merchantMemories = merchantMemories,
+                            cardBillMode = cardBillMode
+                        )
+                        ExtractionResult.Success(listOf(verified), log, ocrResult.skippedPdfPages)
+                    } else {
+                        r.copy(logEntry = log)
+                    }
+                }
+                is ExtractionResult.UnreadableOrNoPayments, is ExtractionResult.Error -> {
+                    if (ocrResult.isValidText) {
+                        val fallback = UpiRegexPreProcessor.createOnDeviceFallbackDraft(
+                            cleanedText = ocrResult.fullCleanedText,
+                            anchors = regexResult.detectedAnchors,
+                            categories = categories,
+                            merchantMemories = merchantMemories,
+                            source = source,
+                            sha256Hash = sha256Hash.ifBlank { null }
+                        )
+                        val verified = LocalDraftVerifier.verifyAndEnrichDraft(
+                            draft = fallback,
+                            onDeviceText = ocrResult.fullCleanedText,
+                            regexAnchors = regexResult.detectedAnchors,
+                            categories = categories,
+                            merchantMemories = merchantMemories,
+                            cardBillMode = cardBillMode
+                        )
+                        ExtractionResult.Success(listOf(verified), log, ocrResult.skippedPdfPages)
+                    } else {
+                        if (r is ExtractionResult.UnreadableOrNoPayments) r.copy(logEntry = log)
+                        else (r as ExtractionResult.Error).copy(logEntry = log)
+                    }
+                }
                 else -> r
             }
 
@@ -737,14 +856,39 @@ class GeminiReceiptExtractor(private val context: Context) {
                 promptTokens = promptTok,
                 outputTokens = outputTok
             )
-            PerFileScanOutcome(
-                uri = uri,
-                result = ExtractionResult.Error(
-                    e.localizedMessage ?: "Couldn't read this file. Tap Retry.",
+
+            if (lastOcrResult != null && lastOcrResult.isValidText) {
+                val fallback = UpiRegexPreProcessor.createOnDeviceFallbackDraft(
+                    cleanedText = lastOcrResult.fullCleanedText,
+                    anchors = lastRegexResult?.detectedAnchors,
+                    categories = categories,
+                    merchantMemories = merchantMemories,
+                    source = if (lastOcrResult.isPdf) TransactionSource.PDF else TransactionSource.SCREENSHOT,
+                    sha256Hash = null
+                )
+                val verified = LocalDraftVerifier.verifyAndEnrichDraft(
+                    draft = fallback,
+                    onDeviceText = lastOcrResult.fullCleanedText,
+                    regexAnchors = lastRegexResult?.detectedAnchors,
+                    categories = categories,
+                    merchantMemories = merchantMemories,
+                    cardBillMode = cardBillMode
+                )
+                PerFileScanOutcome(
+                    uri = uri,
+                    result = ExtractionResult.Success(listOf(verified), log, lastOcrResult.skippedPdfPages),
                     logEntry = log
-                ),
-                logEntry = log
-            )
+                )
+            } else {
+                PerFileScanOutcome(
+                    uri = uri,
+                    result = ExtractionResult.Error(
+                        e.localizedMessage ?: "Couldn't read this file. Tap Retry.",
+                        logEntry = log
+                    ),
+                    logEntry = log
+                )
+            }
         }
     }
 
@@ -1576,5 +1720,89 @@ class GeminiReceiptExtractor(private val context: Context) {
         canvas.drawText("Note: ${p.noteText}", 110f, yPos + 180f, paint)
 
         return bmp
+    }
+}
+
+object StatementCoPilotMerger {
+    fun mergeStatementDraftsWithAiEnrichment(
+        localDrafts: List<DraftTransaction>,
+        aiDrafts: List<DraftTransaction>,
+        rawCleanedText: String,
+        sha256Hash: String,
+        regexAnchors: DetectedUpiAnchors?,
+        categories: List<CategoryEntity>,
+        merchantMemories: List<MerchantMemoryEntity>,
+        cardBillMode: CardBillHandlingMode = CardBillHandlingMode.ASK
+    ): List<DraftTransaction> {
+        val mergedList = mutableListOf<DraftTransaction>()
+        val matchedAiIndices = mutableSetOf<Int>()
+
+        for (local in localDrafts) {
+            var matchIdx = -1
+            if (!local.referenceNumber.isNullOrBlank()) {
+                for ((idx, ai) in aiDrafts.withIndex()) {
+                    if (idx !in matchedAiIndices && !ai.referenceNumber.isNullOrBlank() && ai.referenceNumber == local.referenceNumber) {
+                        matchIdx = idx
+                        break
+                    }
+                }
+            }
+            if (matchIdx == -1) {
+                for ((idx, ai) in aiDrafts.withIndex()) {
+                    if (idx !in matchedAiIndices && ai.amountPaise == local.amountPaise &&
+                        MoneyUtils.formatIsoDate(ai.timestamp) == MoneyUtils.formatIsoDate(local.timestamp)) {
+                        matchIdx = idx
+                        break
+                    }
+                }
+            }
+            if (matchIdx == -1) {
+                for ((idx, ai) in aiDrafts.withIndex()) {
+                    if (idx !in matchedAiIndices && ai.amountPaise == local.amountPaise) {
+                        matchIdx = idx
+                        break
+                    }
+                }
+            }
+
+            val enrichedDraft = if (matchIdx != -1) {
+                matchedAiIndices.add(matchIdx)
+                val ai = aiDrafts[matchIdx]
+                local.copy(
+                    merchant = ai.merchant.ifBlank { local.merchant },
+                    category = ai.category.ifBlank { local.category },
+                    confidence = 0.99f,
+                    amountVerified = true
+                )
+            } else {
+                local
+            }
+
+            val fullyVerified = LocalDraftVerifier.verifyAndEnrichDraft(
+                draft = enrichedDraft.copy(scanSha256Hash = sha256Hash.ifBlank { null }),
+                onDeviceText = rawCleanedText,
+                regexAnchors = regexAnchors,
+                categories = categories,
+                merchantMemories = merchantMemories,
+                cardBillMode = cardBillMode
+            )
+            mergedList.add(fullyVerified)
+        }
+
+        for ((idx, ai) in aiDrafts.withIndex()) {
+            if (idx !in matchedAiIndices && ai.amountPaise > 0L) {
+                val verifiedExtra = LocalDraftVerifier.verifyAndEnrichDraft(
+                    draft = ai.copy(scanSha256Hash = sha256Hash.ifBlank { null }),
+                    onDeviceText = rawCleanedText,
+                    regexAnchors = regexAnchors,
+                    categories = categories,
+                    merchantMemories = merchantMemories,
+                    cardBillMode = cardBillMode
+                )
+                mergedList.add(verifiedExtra)
+            }
+        }
+
+        return mergedList
     }
 }

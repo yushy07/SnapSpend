@@ -55,7 +55,7 @@ object IndianBrandDictionary {
             "reliance smart", "more supermarket", "spencers", "nature's basket", "natures basket",
             "ratnadeep", "star bazaar", "lulu hypermarket", "spar", "country delight",
             "milkbasket", "supr daily", "licious", "freshtohome", "supermarket", "kirana",
-            "grocery", "groceries", "dairy", "amul", "nandini", "mother dairy"
+            "grocery", "groceries", "dairy farm", "amul", "nandini"
         )
 
         // 3. Transport & Fuel (~22 brands)
@@ -102,7 +102,7 @@ object IndianBrandDictionary {
         addBrands(
             "Entertainment",
             "bookmyshow", "pvr", "inox", "cinepolis", "paytm insider", "zomato live",
-            "district", "steam", "playstation", "xbox", "imagica", "wonderla"
+            "district", "steam store", "playstation", "xbox", "imagica", "wonderla"
         )
 
         // 8. Subscriptions (~12 brands)

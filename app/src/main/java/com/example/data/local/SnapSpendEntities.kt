@@ -395,7 +395,8 @@ object DefaultCategories {
         CategoryEntity(id = 15L, name = "Freelance/Side Income", type = CategoryType.EARNING, colorHex = "#0EA5E9", iconName = "work", isDefault = true),
         CategoryEntity(id = 16L, name = "Pocket Money/Gifts", type = CategoryType.EARNING, colorHex = "#F472B6", iconName = "card_giftcard", isDefault = true),
         CategoryEntity(id = 17L, name = "Refunds & Cashback", type = CategoryType.EARNING, colorHex = "#A3E635", iconName = "replay", isDefault = true),
-        CategoryEntity(id = 18L, name = "Other Income", type = CategoryType.EARNING, colorHex = "#EAB308", iconName = "savings", isDefault = true)
+        CategoryEntity(id = 18L, name = "Other Income", type = CategoryType.EARNING, colorHex = "#EAB308", iconName = "savings", isDefault = true),
+        CategoryEntity(id = 19L, name = "Received from People", type = CategoryType.EARNING, colorHex = "#38BDF8", iconName = "person_add", isDefault = true)
     )
 
     val ALL_DEFAULTS: List<CategoryEntity> = EXPENSE_CATEGORIES + EARNING_CATEGORIES

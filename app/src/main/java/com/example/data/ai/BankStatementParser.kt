@@ -17,11 +17,11 @@ interface BankStatementParser {
 }
 
 object BankStatementParserRegistry {
-    private val parsers: List<BankStatementParser> = emptyList()
+    private val parsers: List<BankStatementParser> = listOf(SbiStatementRowParser)
 
     fun findMatchingParser(rawText: String): BankStatementParser? {
-        val headerSample = rawText.lineSequence().take(25).joinToString("\n")
-        return parsers.firstOrNull { it.canParse(headerSample) }
+        val headerSample = rawText.lineSequence().take(30).joinToString("\n")
+        return parsers.firstOrNull { it.canParse(headerSample) || it.canParse(rawText.take(1200)) }
     }
 }
 

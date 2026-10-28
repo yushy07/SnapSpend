@@ -1259,6 +1259,24 @@ fun AiReviewDeckOverlay(
     val isDark = tokens.isDark
     val palette = if (isDark) DarkCandyCardPalette else EditorialCardPalette
     var editingDraft by remember { mutableStateOf<DraftTransaction?>(null) }
+    var hasPromptedMissingFields by remember(scanState) { mutableStateOf(false) }
+
+    LaunchedEffect(scanState) {
+        if (scanState is ScanUiState.ReviewReady && !hasPromptedMissingFields) {
+            val incompleteDraft = scanState.drafts.firstOrNull { draft ->
+                !draft.isSkipped && (
+                    !draft.dateFound ||
+                        draft.amountPaise <= 0L ||
+                        draft.merchant.isBlank() ||
+                        draft.merchant.equals("unknown", ignoreCase = true)
+                )
+            }
+            if (incompleteDraft != null && editingDraft == null) {
+                editingDraft = incompleteDraft
+                hasPromptedMissingFields = true
+            }
+        }
+    }
 
     EditorialSquiggleBackground(modifier = Modifier.fillMaxSize()) {
         Column(

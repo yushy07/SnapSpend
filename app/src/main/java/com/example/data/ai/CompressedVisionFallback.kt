@@ -70,16 +70,14 @@ class CompressedVisionFallback(private val context: Context) {
         val t0 = SystemClock.elapsedRealtime()
         onStatusUpdate("Enhancing & scanning photo...")
 
-        val bitmap = when {
-            sourceUri != null -> ImageCompressor.compressForVisionFallback(context, sourceUri)
-            sourceBitmap != null -> {
-                val bytes = ImageCompressor.compressBitmapToJpegBytes(sourceBitmap, maxEdge = 1024, quality = 75)
-                android.graphics.BitmapFactory.decodeByteArray(bytes, 0, bytes.size)
-            }
-            else -> null
-        }
+        val bitmapFromUri = if (sourceUri != null) ImageCompressor.compressForVisionFallback(context, sourceUri) else null
+        val bitmap = bitmapFromUri ?: if (sourceBitmap != null) {
+            val bytes = ImageCompressor.compressBitmapToJpegBytes(sourceBitmap, maxEdge = 1024, quality = 75)
+            android.graphics.BitmapFactory.decodeByteArray(bytes, 0, bytes.size)
+        } else null
 
         if (bitmap == null) {
+            Log.w(TAG, "CompressedVisionFallback: Could not obtain bitmap (sourceUri=$sourceUri, hasSourceBitmap=${sourceBitmap != null})")
             return@withContext VisionCallTelemetry(
                 result = ExtractionResult.UnreadableOrNoPayments(
                     "Could not process or compress the image for visual reading."

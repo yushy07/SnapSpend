@@ -2,11 +2,11 @@
   "formatVersion": 1,
   "database": {
     "version": 4,
-    "identityHash": "f7bdb021986764ccaa0290c0c00237b6",
+    "identityHash": "e4290f90ae3fd6df3ef66afcf59ef67a",
     "entities": [
       {
         "tableName": "transactions",
-        "createSql": "CREATE TABLE IF NOT EXISTS `${TABLE_NAME}` (`id` INTEGER PRIMARY KEY AUTOINCREMENT NOT NULL, `timestamp` INTEGER NOT NULL, `hasExplicitTime` INTEGER NOT NULL, `amountPaise` INTEGER NOT NULL, `type` TEXT NOT NULL, `merchant` TEXT NOT NULL, `category` TEXT NOT NULL, `categoryId` INTEGER NOT NULL, `paymentApp` TEXT NOT NULL, `referenceNumber` TEXT, `status` TEXT NOT NULL, `note` TEXT NOT NULL, `createdAt` INTEGER NOT NULL, `source` TEXT NOT NULL, `duplicateKey` TEXT NOT NULL, `deletedAtMillis` INTEGER, `paymentMode` TEXT NOT NULL)",
+        "createSql": "CREATE TABLE IF NOT EXISTS `${TABLE_NAME}` (`id` INTEGER PRIMARY KEY AUTOINCREMENT NOT NULL, `timestamp` INTEGER NOT NULL, `hasExplicitTime` INTEGER NOT NULL, `amountPaise` INTEGER NOT NULL, `type` TEXT NOT NULL, `merchant` TEXT NOT NULL, `category` TEXT NOT NULL, `categoryId` INTEGER NOT NULL, `paymentApp` TEXT NOT NULL, `referenceNumber` TEXT, `status` TEXT NOT NULL, `note` TEXT NOT NULL, `createdAt` INTEGER NOT NULL, `source` TEXT NOT NULL, `duplicateKey` TEXT NOT NULL, `deletedAtMillis` INTEGER, `paymentMode` TEXT NOT NULL, `isAtmWithdrawal` INTEGER NOT NULL)",
         "fields": [
           {
             "fieldPath": "id",
@@ -106,6 +106,12 @@
             "fieldPath": "paymentMode",
             "columnName": "paymentMode",
             "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "isAtmWithdrawal",
+            "columnName": "isAtmWithdrawal",
+            "affinity": "INTEGER",
             "notNull": true
           }
         ],
@@ -342,7 +348,7 @@
     ],
     "setupQueries": [
       "CREATE TABLE IF NOT EXISTS room_master_table (id INTEGER PRIMARY KEY,identity_hash TEXT)",
-      "INSERT OR REPLACE INTO room_master_table (id,identity_hash) VALUES(42, 'f7bdb021986764ccaa0290c0c00237b6')"
+      "INSERT OR REPLACE INTO room_master_table (id,identity_hash) VALUES(42, 'e4290f90ae3fd6df3ef66afcf59ef67a')"
     ]
   }
 }

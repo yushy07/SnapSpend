@@ -8,6 +8,8 @@ import android.net.Uri
 import android.os.Build
 import android.os.Bundle
 import androidx.core.app.ActivityCompat
+import androidx.core.splashscreen.SplashScreen.Companion.installSplashScreen
+import com.example.ui.components.SnapSpendSplashOverlay
 import androidx.activity.ComponentActivity
 import androidx.activity.SystemBarStyle
 import androidx.activity.compose.BackHandler
@@ -206,6 +208,7 @@ class MainActivity : ComponentActivity() {
     private val viewModel: SnapSpendViewModel by viewModels()
 
     override fun onCreate(savedInstanceState: Bundle?) {
+        val splashScreen = installSplashScreen()
         super.onCreate(savedInstanceState)
 
         // STEP 1: Configure App Check with launch intent before any UI or Firebase operations
@@ -275,29 +278,48 @@ class MainActivity : ComponentActivity() {
                 }
             }
 
+            var isSplashReady by remember { mutableStateOf(false) }
+            var splashOverlayDismissed by remember { mutableStateOf(false) }
+
+            LaunchedEffect(hasSeenOnboarding) {
+                if (hasSeenOnboarding != null) {
+                    kotlinx.coroutines.delay(350L)
+                    isSplashReady = true
+                }
+            }
+
             CompositionLocalProvider(LocalRetroSoundManager provides soundManager) {
                 SnapSpendTheme(themeMode = themeMode) {
-                    if (hasSeenOnboarding == false) {
-                        OnboardingCarouselScreen(
-                            onFinish = {
-                                coroutineScope.launch {
-                                    snapSpendPrefs.setHasSeenOnboarding(true)
+                    Box(modifier = Modifier.fillMaxSize()) {
+                        if (hasSeenOnboarding == false) {
+                            OnboardingCarouselScreen(
+                                onFinish = {
+                                    coroutineScope.launch {
+                                        snapSpendPrefs.setHasSeenOnboarding(true)
+                                    }
                                 }
-                            }
-                        )
-                    } else if (hasSeenOnboarding == true) {
-                        SnapSpendRootScreen(
-                            viewModel = viewModel,
-                            themeMode = themeMode,
-                            activity = this@MainActivity,
-                            snapSpendPrefs = snapSpendPrefs
-                        )
-                    } else {
-                        Box(
-                            modifier = Modifier
-                                .fillMaxSize()
-                                .background(SnapSpendThemeTokens.colors.appBackground)
-                        )
+                            )
+                        } else if (hasSeenOnboarding == true) {
+                            SnapSpendRootScreen(
+                                viewModel = viewModel,
+                                themeMode = themeMode,
+                                activity = this@MainActivity,
+                                snapSpendPrefs = snapSpendPrefs
+                            )
+                        } else {
+                            Box(
+                                modifier = Modifier
+                                    .fillMaxSize()
+                                    .background(SnapSpendThemeTokens.colors.appBackground)
+                            )
+                        }
+
+                        if (!splashOverlayDismissed) {
+                            SnapSpendSplashOverlay(
+                                isReady = isSplashReady,
+                                onDismissed = { splashOverlayDismissed = true }
+                            )
+                        }
                     }
                 }
             }

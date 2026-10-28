@@ -100,7 +100,7 @@ class LocalDocumentExtractor(private val context: Context) {
             extractPdfDocument(uri, pdfPassword, onPageExtracted)
         } else {
             val t0 = SystemClock.elapsedRealtime()
-            val bitmap = ImageCompressor.decodeScaledBitmapForOcr(context, uri, targetWidth = 1280)
+            val bitmap = ImageCompressor.decodeScaledBitmapForOcr(context, uri, targetWidth = 1800)
             val readMs = (SystemClock.elapsedRealtime() - t0).coerceAtLeast(1L)
 
             val tOcrStart = SystemClock.elapsedRealtime()
@@ -179,11 +179,22 @@ class LocalDocumentExtractor(private val context: Context) {
         )
     }
 
+    private data class PositionedLine(
+        val text: String,
+        val top: Int,
+        val left: Int
+    )
+
     private suspend fun extractImageTextFromBitmap(bitmap: Bitmap, pageIndex: Int): ExtractedPage {
         return try {
-            val inputImage = InputImage.fromBitmap(bitmap, 0)
-            val visionText = recognizer.process(inputImage).await()
-            val orderedRawText = sortVisionTextSpatially(visionText)
+            val isTallImage = bitmap.height > (bitmap.width * 1.8f)
+            val orderedRawText = if (isTallImage && bitmap.height > 2000) {
+                extractTiledTallBitmapText(bitmap)
+            } else {
+                val inputImage = InputImage.fromBitmap(bitmap, 0)
+                val visionText = recognizer.process(inputImage).await()
+                sortVisionTextSpatially(visionText)
+            }
             val cleaned = stripStatusBarNoise(orderedRawText)
             ExtractedPage(
                 pageIndex = pageIndex,
@@ -202,6 +213,73 @@ class LocalDocumentExtractor(private val context: Context) {
                 usedNativePdfText = false
             )
         }
+    }
+
+    private suspend fun extractTiledTallBitmapText(bitmap: Bitmap): String {
+        val stripHeight = 1800
+        val overlap = 120
+        val allPositionedLines = mutableListOf<PositionedLine>()
+        var yOffset = 0
+
+        while (yOffset < bitmap.height) {
+            val currentHeight = min(stripHeight, bitmap.height - yOffset)
+            val stripBitmap = Bitmap.createBitmap(bitmap, 0, yOffset, bitmap.width, currentHeight)
+            try {
+                val inputImage = InputImage.fromBitmap(stripBitmap, 0)
+                val visionText = recognizer.process(inputImage).await()
+                for (block in visionText.textBlocks) {
+                    for (line in block.lines) {
+                        val top = (line.boundingBox?.top ?: 0) + yOffset
+                        val left = line.boundingBox?.left ?: 0
+                        val text = line.text.trim()
+                        if (text.isNotBlank()) {
+                            val isDuplicate = allPositionedLines.any { prev ->
+                                abs(prev.top - top) <= 20 &&
+                                    (prev.text.equals(text, ignoreCase = true) ||
+                                     prev.text.contains(text, ignoreCase = true) ||
+                                     text.contains(prev.text, ignoreCase = true))
+                            }
+                            if (!isDuplicate) {
+                                allPositionedLines.add(PositionedLine(text, top, left))
+                            }
+                        }
+                    }
+                }
+            } finally {
+                if (stripBitmap != bitmap && !stripBitmap.isRecycled) {
+                    stripBitmap.recycle()
+                }
+            }
+
+            if (yOffset + currentHeight >= bitmap.height) {
+                break
+            }
+            yOffset += (stripHeight - overlap)
+        }
+
+        if (allPositionedLines.isEmpty()) return ""
+
+        allPositionedLines.sortWith { a, b ->
+            if (abs(a.top - b.top) <= 15) {
+                a.left.compareTo(b.left)
+            } else {
+                a.top.compareTo(b.top)
+            }
+        }
+
+        val sb = StringBuilder()
+        var lastTop = -1
+        for (line in allPositionedLines) {
+            if (lastTop != -1 && abs(line.top - lastTop) > 15) {
+                sb.append("\n")
+            } else if (sb.isNotEmpty()) {
+                sb.append("   ")
+            }
+            sb.append(line.text.trim())
+            lastTop = line.top
+        }
+
+        return sb.toString().trim()
     }
 
     /**

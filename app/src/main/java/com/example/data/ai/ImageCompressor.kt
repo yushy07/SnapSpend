@@ -28,6 +28,28 @@ object ImageCompressor {
     private const val JPEG_QUALITY = 75
 
     /**
+     * Safely reads the binary content of a URI (either file:// or content://) once into memory.
+     * Prevents pipe closed / stream seek exceptions common with Android Photo Picker and OEM galleries.
+     */
+    suspend fun readUriBytes(context: Context, uri: Uri): ByteArray? = withContext(Dispatchers.IO) {
+        try {
+            if (uri.scheme == "file") {
+                val path = uri.path ?: return@withContext null
+                val file = java.io.File(path)
+                if (file.exists() && file.canRead()) {
+                    return@withContext file.readBytes()
+                }
+            }
+            context.contentResolver.openInputStream(uri)?.use { stream ->
+                stream.readBytes()
+            }
+        } catch (e: Exception) {
+            Log.e(TAG, "Failed to read bytes for URI: $uri", e)
+            null
+        }
+    }
+
+    /**
      * Prepares a compressed, orientation-corrected Bitmap for Gemini Multimodal Vision Fallback.
      */
     suspend fun compressForVisionFallback(
@@ -58,7 +80,7 @@ object ImageCompressor {
 
     /**
      * Safely reads a URI, inspects dimensions, reads EXIF orientation, applies downsampling,
-     * scales to maxEdge, and compresses to JPEG bytes.
+     * scales to maxEdge, and compresses to JPEG bytes without stream-seeking errors.
      */
     suspend fun compressUriToJpegBytes(
         context: Context,
@@ -67,18 +89,18 @@ object ImageCompressor {
         quality: Int = JPEG_QUALITY
     ): ByteArray? = withContext(Dispatchers.IO) {
         try {
-            // 1. Inspect bounds
+            val bytes = readUriBytes(context, uri) ?: return@withContext null
+
+            // 1. Inspect bounds from ByteArray
             val options = BitmapFactory.Options().apply { inJustDecodeBounds = true }
-            context.contentResolver.openInputStream(uri)?.use { stream ->
-                BitmapFactory.decodeStream(stream, null, options)
-            } ?: return@withContext null
+            BitmapFactory.decodeByteArray(bytes, 0, bytes.size, options)
 
             val origWidth = options.outWidth
             val origHeight = options.outHeight
             if (origWidth <= 0 || origHeight <= 0) return@withContext null
 
             // 2. Read EXIF rotation
-            val rotationDegrees = getExifRotationDegrees(context, uri)
+            val rotationDegrees = getExifRotationDegreesFromBytes(bytes)
 
             // 3. Compute inSampleSize
             val longestEdge = max(origWidth, origHeight)
@@ -92,9 +114,8 @@ object ImageCompressor {
                 this.inSampleSize = inSampleSize
                 inPreferredConfig = Bitmap.Config.ARGB_8888
             }
-            val downsampled = context.contentResolver.openInputStream(uri)?.use { stream ->
-                BitmapFactory.decodeStream(stream, null, decodeOptions)
-            } ?: return@withContext null
+            val downsampled = BitmapFactory.decodeByteArray(bytes, 0, bytes.size, decodeOptions)
+                ?: return@withContext null
 
             // 5. Apply EXIF rotation if needed
             val orientedBitmap = if (rotationDegrees != 0) {
@@ -130,7 +151,8 @@ object ImageCompressor {
     }
 
     /**
-     * Decodes a scaled Bitmap specifically for on-device ML Kit OCR (e.g. ~1280px width).
+     * Decodes a scaled Bitmap specifically for on-device ML Kit OCR (e.g. ~1280px width)
+     * using memory-safe ByteArray decoding.
      */
     suspend fun decodeScaledBitmapForOcr(
         context: Context,
@@ -138,16 +160,16 @@ object ImageCompressor {
         targetWidth: Int = 1280
     ): Bitmap? = withContext(Dispatchers.IO) {
         try {
+            val bytes = readUriBytes(context, uri) ?: return@withContext null
+
             val boundsOptions = BitmapFactory.Options().apply { inJustDecodeBounds = true }
-            context.contentResolver.openInputStream(uri)?.use { stream ->
-                BitmapFactory.decodeStream(stream, null, boundsOptions)
-            } ?: return@withContext null
+            BitmapFactory.decodeByteArray(bytes, 0, bytes.size, boundsOptions)
 
             val origWidth = boundsOptions.outWidth
             val origHeight = boundsOptions.outHeight
             if (origWidth <= 0 || origHeight <= 0) return@withContext null
 
-            val rotationDegrees = getExifRotationDegrees(context, uri)
+            val rotationDegrees = getExifRotationDegreesFromBytes(bytes)
 
             var sampleSize = 1
             while ((origWidth / (sampleSize * 2)) >= targetWidth) {
@@ -158,9 +180,8 @@ object ImageCompressor {
                 inSampleSize = sampleSize
                 inPreferredConfig = Bitmap.Config.ARGB_8888
             }
-            val raw = context.contentResolver.openInputStream(uri)?.use { stream ->
-                BitmapFactory.decodeStream(stream, null, decodeOptions)
-            } ?: return@withContext null
+            val raw = BitmapFactory.decodeByteArray(bytes, 0, bytes.size, decodeOptions)
+                ?: return@withContext null
 
             val oriented = if (rotationDegrees != 0) {
                 val matrix = Matrix().apply { postRotate(rotationDegrees.toFloat()) }
@@ -204,19 +225,17 @@ object ImageCompressor {
         return Bitmap.createScaledBitmap(bitmap, newWidth, newHeight, true)
     }
 
-    private fun getExifRotationDegrees(context: Context, uri: Uri): Int {
+    private fun getExifRotationDegreesFromBytes(bytes: ByteArray): Int {
         return try {
-            context.contentResolver.openInputStream(uri)?.use { inputStream ->
-                val exif = ExifInterface(inputStream)
-                when (exif.getAttributeInt(ExifInterface.TAG_ORIENTATION, ExifInterface.ORIENTATION_NORMAL)) {
-                    ExifInterface.ORIENTATION_ROTATE_90 -> 90
-                    ExifInterface.ORIENTATION_ROTATE_180 -> 180
-                    ExifInterface.ORIENTATION_ROTATE_270 -> 270
-                    else -> 0
-                }
-            } ?: 0
+            val exif = ExifInterface(ByteArrayInputStream(bytes))
+            when (exif.getAttributeInt(ExifInterface.TAG_ORIENTATION, ExifInterface.ORIENTATION_NORMAL)) {
+                ExifInterface.ORIENTATION_ROTATE_90 -> 90
+                ExifInterface.ORIENTATION_ROTATE_180 -> 180
+                ExifInterface.ORIENTATION_ROTATE_270 -> 270
+                else -> 0
+            }
         } catch (e: Exception) {
-            Log.w(TAG, "Failed to read EXIF orientation for $uri", e)
+            Log.w(TAG, "Failed to read EXIF orientation from bytes", e)
             0
         }
     }

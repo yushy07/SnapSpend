@@ -1,6 +1,6 @@
 {
-  "summary":  "Implementation plan for fixing data/chart filtering bugs, navigation and file-cleanup edge cases, popup pill menus, keyboard/scroll ergonomics, and empty-state quick-reset actions across SnapSpend.",
-  "updatedAt":  "2026-10-28T13:54:30.429351922Z",
+  "summary":  "Detailed implementation plan for the Co-Pilot Hybrid Statement & Receipt Pipeline combining local OCR tiling, deterministic SBI row parsing, mandatory Gemini 3.8-Flash AI enrichment, offline queueing, and automatic All Time filter sync with historical snackbar.",
+  "updatedAt":  "2026-10-28T16:58:42.012033850Z",
   "requestFeedback":  true,
   "userFacing":  true
 }

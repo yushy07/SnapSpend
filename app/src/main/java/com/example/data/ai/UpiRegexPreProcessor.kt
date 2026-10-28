@@ -124,7 +124,6 @@ object UpiRegexPreProcessor {
             // 5. (UTR found OR merchant is in merchant memory)
             val eligibleForFastPath = (
                 !anchors.merchant.isNullOrBlank() &&
-                    anchors.dateFound &&
                     anchors.status == TransactionStatus.SUCCESS &&
                     (anchors.utrOrRef != null || isInMerchantMemory)
                 ) || forceOffline
@@ -413,6 +412,55 @@ object UpiRegexPreProcessor {
             merchantText = trimmed,
             rawText = rawText,
             allowedCategories = categories
+        )
+    }
+
+    /**
+     * Constructs an on-device fallback DraftTransaction when cloud AI is unreachable or times out,
+     * but local OCR has extracted valid text from the receipt.
+     */
+    fun createOnDeviceFallbackDraft(
+        cleanedText: String,
+        anchors: DetectedUpiAnchors?,
+        categories: List<CategoryEntity>,
+        merchantMemories: List<MerchantMemoryEntity>,
+        source: TransactionSource = TransactionSource.SCREENSHOT,
+        sha256Hash: String? = null
+    ): DraftTransaction {
+        val amount = anchors?.amountPaise ?: 0L
+        val merchantName = anchors?.merchant?.takeIf { it.isNotBlank() } ?: "Receipt / Bill"
+        val matchedCategory = anchors?.let {
+            findMatchingCategory(
+                merchant = merchantName,
+                categories = categories,
+                memories = merchantMemories,
+                rawText = it.rawMerchant.orEmpty()
+            )
+        } ?: "Other"
+        val (timestampMillis, hasExplicitTime) = MoneyUtils.parseDateAndTime(anchors?.dateIso, anchors?.time24h)
+        val hasDate = anchors?.dateFound == true
+
+        return DraftTransaction(
+            timestamp = timestampMillis,
+            hasExplicitTime = hasExplicitTime,
+            amountPaise = amount,
+            type = anchors?.type ?: TransactionType.EXPENSE,
+            merchant = merchantName,
+            rawMerchantText = anchors?.rawMerchant ?: "",
+            category = matchedCategory,
+            paymentApp = anchors?.paymentApp ?: "UPI",
+            referenceNumber = anchors?.utrOrRef,
+            status = anchors?.status ?: TransactionStatus.SUCCESS,
+            confidence = if (amount > 0L && hasDate) 0.72f else 0.50f,
+            note = if (!anchors?.utrOrRef.isNullOrBlank()) "Ref: ${anchors?.utrOrRef}" else "Read via on-device scanner",
+            splitWays = 1,
+            source = source,
+            paymentMode = anchors?.paymentMode ?: "ONLINE",
+            isAtmWithdrawal = anchors?.isAtmWithdrawal == true,
+            appliedMerchantMemory = false,
+            dateFound = hasDate,
+            amountVerified = amount > 0L,
+            scanSha256Hash = sha256Hash
         )
     }
 }
